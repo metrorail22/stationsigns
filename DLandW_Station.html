@@ -11,7 +11,7 @@
       --time:#03c6fc;
     }
     *{box-sizing:border-box;}
-    html { font-size: 20px; }  /* try 18–26 depending on screen */
+    html { font-size: 24px; }  /* try 18–26 depending on screen */
     body{
       zoom: 1.25;              /* Chrome-based players */
       transform: scale(1.25);  /* fallback */
@@ -74,6 +74,10 @@
       flex-direction:column;
       min-height:0;
       box-shadow:0 10px 30px rgba(0,0,0,.35);
+    }
+     .container {
+       width: 1920px;   /* if your display is 1080p */
+       height: 1080px;
     }
     .card h2{
       margin:0 0 clamp(8px,1.2vh,10px) 0;
