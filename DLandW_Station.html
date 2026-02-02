@@ -13,6 +13,9 @@
     *{box-sizing:border-box;}
     html { font-size: 20px; }  /* try 18–26 depending on screen */
     body{
+      zoom: 1.25;              /* Chrome-based players */
+      transform: scale(1.25);  /* fallback */
+      transform-origin: top left;
       margin:0;
       background:linear-gradient(180deg,var(--bg),#070a10);
       color:var(--text);
