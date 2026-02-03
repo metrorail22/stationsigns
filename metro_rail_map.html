@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NFTA Metro Rail Map (Local GTFS)</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <style>
+    :root { --pad: 14px; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    header {
+      padding: var(--pad);
+      border-bottom: 1px solid #e6e6e6;
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    header h1 { margin: 0; font-size: 18px; }
+    header .meta { color: #666; font-size: 13px; }
+    header .pill {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      color: #111827;
+    }
+    #map { width: 100%; height: calc(100vh - 58px); }
+    #panel {
+      position: absolute;
+      top: 72px;
+      left: 12px;
+      right: 12px;
+      max-width: 560px;
+      z-index: 999;
+      background: rgba(255,255,255,0.95);
+      border: 1px solid #e6e6e6;
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    }
+    #panel h2 { margin: 0 0 6px 0; font-size: 14px; }
+    #panel p { margin: 6px 0; font-size: 13px; color: #333; line-height: 1.35; }
+    #panel code { font-size: 12px; background: #f6f8fa; padding: 1px 4px; border-radius: 6px; }
+    #panel .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    #panel button, #panel a.btn {
+      appearance: none;
+      border: 1px solid #d1d5db;
+      background: #fff;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+      color: #111827;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #panel button.primary, #panel a.primary {
+      border-color: #111827;
+      background: #111827;
+      color: #fff;
+    }
+    #status { font-size: 12px; color: #555; margin-top: 8px; }
+    .small { font-size: 12px; color: #6b7280; }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>NFTA Metro Rail Map</h1>
+    <span class="meta">as of <span id="today"></span></span>
+    <span class="pill" id="modePill">Loading local GTFS…</span>
+  </header>
+
+  <div id="map"></div>
+
+  <div id="panel">
+    <h2>Data source (local)</h2>
+    <p>
+      Loading GTFS from: <code id="gtfsUrlText"></code>
+    </p>
+    <p class="small">
+      Put <code>google_transit.zip</code> in <code>/var/www/html/stations</code>.
+    </p>
+    <div class="row">
+      <button class="primary" id="reloadBtn">Reload</button>
+      <a class="btn" id="openGtfs" target="_blank" rel="noopener">Open zip</a>
+    </div>
+    <div id="status">Initializing…</div>
+  </div>
+
+<script>
+(() => {
+  // Local GTFS zip (same folder as this HTML)
+  const GTFS_ZIP_URL = "./google_transit.zip";
+
+  document.getElementById("today").textContent =
+    new Date().toLocaleString(undefined, { year: "numeric", month: "long", day: "numeric" });
+
+  const gtfsUrlText = document.getElementById("gtfsUrlText");
+  const statusEl = document.getElementById("status");
+  const modePill = document.getElementById("modePill");
+  gtfsUrlText.textContent = GTFS_ZIP_URL;
+  document.getElementById("openGtfs").href = GTFS_ZIP_URL;
+
+  const map = L.map("map", { zoomControl: true }).setView([42.8864, -78.8784], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  let lineLayer = null;
+  let stationLayer = null;
+
+  function setStatus(msg) { statusEl.textContent = msg; }
+  function setMode(label, ok=true) {
+    modePill.textContent = label;
+    modePill.style.background = ok ? "#ecfdf5" : "#fef2f2";
+    modePill.style.borderColor = ok ? "#a7f3d0" : "#fecaca";
+    modePill.style.color = ok ? "#065f46" : "#991b1b";
+  }
+
+  function clearLayers() {
+    if (lineLayer) { map.removeLayer(lineLayer); lineLayer = null; }
+    if (stationLayer) { map.removeLayer(stationLayer); stationLayer = null; }
+  }
+
+  function parseCSV(text) {
+    const rows = [];
+    let i = 0, field = "", row = [], inQuotes = false;
+    while (i < text.length) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i+1] === '"') { field += '"'; i += 2; continue; }
+          inQuotes = false; i++; continue;
+        }
+        field += c; i++; continue;
+      } else {
+        if (c === '"') { inQuotes = true; i++; continue; }
+        if (c === ',') { row.push(field); field = ""; i++; continue; }
+        if (c === '\r') { i++; continue; }
+        if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+        field += c; i++; continue;
+      }
+    }
+    row.push(field);
+    rows.push(row);
+    return rows;
+  }
+
+  function toObjects(csvText) {
+    const rows = parseCSV(csvText);
+    const headers = rows[0];
+    const out = [];
+    for (let r = 1; r < rows.length; r++) {
+      const obj = {};
+      for (let c = 0; c < headers.length; c++) obj[headers[c]] = rows[r][c] ?? "";
+      out.push(obj);
+    }
+    return out;
+  }
+
+  function pickRailRoute(routes) {
+    const tram = routes.filter(r => (r.route_type || "").trim() === "0");
+    const railNamed = tram.find(r => (r.route_long_name || r.route_short_name || "").toUpperCase().includes("RAIL"));
+    return railNamed || tram[0] || routes[0];
+  }
+
+  async function loadGTFS() {
+    clearLayers();
+    setMode("Loading local GTFS…", true);
+    setStatus("Downloading local GTFS zip…");
+
+    let buf;
+    try {
+      const res = await fetch(GTFS_ZIP_URL, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      buf = await res.arrayBuffer();
+    } catch (e) {
+      setMode("Failed to load zip", false);
+      setStatus(`Could not fetch ${GTFS_ZIP_URL} (${e?.message || e}).`);
+      return;
+    }
+
+    setStatus("Unzipping…");
+    let zip;
+    try {
+      zip = await JSZip.loadAsync(buf);
+    } catch (e) {
+      setMode("Bad zip", false);
+      setStatus("Could not unzip google_transit.zip in browser.");
+      return;
+    }
+
+    const needed = ["stops.txt", "routes.txt", "trips.txt", "shapes.txt"];
+    for (const f of needed) {
+      if (!zip.file(f)) {
+        setMode("Missing GTFS files", false);
+        setStatus(`GTFS is missing ${f}.`);
+        return;
+      }
+    }
+
+    setStatus("Parsing stops/routes/trips/shapes…");
+    const [stopsTxt, routesTxt, tripsTxt, shapesTxt] = await Promise.all([
+      zip.file("stops.txt").async("string"),
+      zip.file("routes.txt").async("string"),
+      zip.file("trips.txt").async("string"),
+      zip.file("shapes.txt").async("string"),
+    ]);
+
+    const stops = toObjects(stopsTxt);
+    const routes = toObjects(routesTxt);
+    const trips = toObjects(tripsTxt);
+    const shapes = toObjects(shapesTxt);
+
+    const railRoute = pickRailRoute(routes);
+    if (!railRoute || !railRoute.route_id) {
+      setMode("No rail route found", false);
+      setStatus("Could not identify a rail route in routes.txt.");
+      return;
+    }
+
+    const railTrip = trips.find(t => t.route_id === railRoute.route_id);
+    if (!railTrip || !railTrip.shape_id) {
+      setMode("No rail trip/shape", false);
+      setStatus("Could not find a trip/shape for the rail route.");
+      return;
+    }
+
+    const shapePts = shapes
+      .filter(s => s.shape_id === railTrip.shape_id)
+      .map(s => ({
+        lat: parseFloat(s.shape_pt_lat),
+        lon: parseFloat(s.shape_pt_lon),
+        seq: parseInt(s.shape_pt_sequence || "0", 10)
+      }))
+      .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon))
+      .sort((a,b) => a.seq - b.seq);
+
+    if (shapePts.length < 2) {
+      setMode("Shape too small", false);
+      setStatus("Rail shape has too few points to draw.");
+      return;
+    }
+
+    let stations = stops.filter(s => (s.location_type || "").trim() === "1");
+    if (stations.length === 0) stations = stops.filter(s => s.stop_lat && s.stop_lon);
+
+    stations = stations
+      .map(s => ({
+        id: s.stop_id,
+        name: s.stop_name || s.stop_id,
+        lat: parseFloat(s.stop_lat),
+        lon: parseFloat(s.stop_lon)
+      }))
+      .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
+
+    const latlngs = shapePts.map(p => [p.lat, p.lon]);
+    lineLayer = L.polyline(latlngs, { weight: 5, opacity: 0.9 }).addTo(map);
+
+    stationLayer = L.layerGroup().addTo(map);
+    stations.forEach(s => {
+      const m = L.circleMarker([s.lat, s.lon], { radius: 6, weight: 2, fillOpacity: 0.9 });
+      m.bindPopup(`<b>${escapeHtml(s.name)}</b><br/>Stop ID: ${escapeHtml(s.id)}`);
+      m.addTo(stationLayer);
+    });
+
+    map.fitBounds(lineLayer.getBounds().pad(0.15));
+    setMode("Local GTFS map", true);
+    setStatus(`Route: "${railRoute.route_long_name || railRoute.route_short_name || railRoute.route_id}". Stations: ${stations.length}, shape points: ${shapePts.length}.`);
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  document.getElementById("reloadBtn").addEventListener("click", loadGTFS);
+  loadGTFS();
+})();
+</script>
+</body>
+</html>
