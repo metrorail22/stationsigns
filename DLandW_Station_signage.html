@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>DL&W Station – Next 3 Departures</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --panel:#101826; --panel2:#0e1522; --text:#eaf2ff; --muted:#a9b7d0;
+      --line:rgba(255,255,255,.12); --accent:#7dd3fc; --good:#86efac; --bad:#fca5a5;
+      --time:#03c6fc;
+    
+      --uiScale: 1.0;
+      --signageScale: 1.55; /* tuned for 43" 16:9 @ 1080p */
+    }
+    *{box-sizing:border-box;}
+    html,body{height:100%}
+    body{
+      margin:0;
+      background:linear-gradient(180deg,var(--bg),#070a10);
+      color:var(--text);
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      overflow:hidden;
+    }
+    .wrap{
+      height:100%;
+      display:flex;
+      flex-direction:column;
+      padding:clamp(12px,2.0vh,22px) clamp(14px,2.2vw,26px);
+      gap:clamp(10px,1.6vh,16px);
+    }
+
+    /* === Signage mode (OptiSigns auto-detect or ?signage=1) === */
+    html.signage .wrap{
+      transform: scale(var(--signageScale));
+      transform-origin: top left;
+      width: calc(100% / var(--signageScale));
+      height: calc(100% / var(--signageScale));
+    }
+    html.signage .dbg, html.signage #dbgBtn{display:none !important;}
+    html.signage .footer{opacity:0.9;}
+    .top{
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:clamp(12px,2vw,16px);
+      padding:clamp(14px,2.2vh,18px) clamp(14px,2.0vw,20px);
+      background:linear-gradient(180deg,var(--panel),var(--panel2));
+      border:1px solid var(--line);
+      border-radius:clamp(14px,2.2vh,18px);
+      box-shadow:0 10px 30px rgba(0,0,0,.35);
+    }
+    .title{display:flex;flex-direction:column;gap:clamp(4px,0.7vh,6px);}
+    .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    .title h1{margin:0;font-size:clamp(26px,3.2vw,42px);letter-spacing:.2px;}
+    .subtitle{color:var(--muted);font-size:clamp(12px,1.2vw,16px);display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+    .badge{
+      font-size:clamp(10px,0.95vw,12px);
+      color:#0b1220;
+      background:rgba(125,211,252,.95);
+      padding:4px 10px;
+      border-radius:999px;
+      font-weight:800;
+      letter-spacing:.04em;
+      white-space:nowrap;
+    }
+    .badge.weekend{background:rgba(252,165,165,.95);}
+    .clock{text-align:right;display:flex;flex-direction:column;gap:clamp(4px,0.7vh,6px);min-width:clamp(180px,22vw,260px);}
+    .clock .time{font-size:clamp(30px,3.6vw,50px);font-weight:700;letter-spacing:.5px;}
+    .clock .date{color:var(--muted);font-size:clamp(12px,1.2vw,16px);}
+    .grid{
+      display:grid;
+      grid-template-columns:1fr;
+      gap:clamp(10px,1.6vh,16px);
+      flex:1;
+      min-height:0;
+    }
+    .card{
+      background:linear-gradient(180deg,var(--panel),var(--panel2));
+      border:1px solid var(--line);
+      border-radius:clamp(14px,2.2vh,18px);
+      padding:clamp(12px,1.8vh,16px) clamp(12px,1.8vw,18px);
+      display:flex;
+      flex-direction:column;
+      min-height:0;
+      box-shadow:0 10px 30px rgba(0,0,0,.35);
+    }
+    .card h2{
+      margin:0 0 clamp(8px,1.2vh,10px) 0;
+      font-size:clamp(16px,1.8vw,22px);
+      letter-spacing:.2px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:clamp(8px,1.2vw,10px);
+    }
+    .pill{
+      font-size:clamp(11px,1.0vw,14px);
+      color:#0b1220;
+      background:var(--accent);
+      padding:clamp(5px,0.8vh,6px) clamp(8px,1.2vw,10px);
+      border-radius:999px;
+      font-weight:700;
+      letter-spacing:.2px;
+      white-space:nowrap;
+    }
+    table{width:100%;border-collapse:collapse;font-size:clamp(14px,1.3vw,18px);}
+    col.c-time{width:46%;}
+    col.c-dir{width:24%;}
+    col.c-in{width:30%;}
+    th,td{padding:clamp(8px,1.2vh,12px) clamp(4px,0.6vw,6px);border-bottom:1px solid var(--line);}
+    th{color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em;font-size:clamp(10px,0.95vw,12px);}
+    td.time{font-size:clamp(22px,2.3vw,34px);font-weight:800;letter-spacing:.4px;color:var(--time);}
+    td.dir{color:var(--text);font-weight:650;font-size:clamp(14px,1.4vw,20px);}
+    td.in{color:var(--good);font-weight:700;text-align:right;white-space:nowrap;font-size:clamp(14px,1.4vw,20px);}
+    tr:last-child td{border-bottom:0}
+
+    .footer{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      color:var(--muted);
+      font-size:clamp(10px,0.95vw,12px);
+      padding:0 clamp(4px,0.6vw,6px);
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .status-ok{color:var(--good);font-weight:700;}
+    .status-bad{color:var(--bad);font-weight:700;}
+    .small{font-size:clamp(10px,0.9vw,11px);opacity:.95}
+
+    /* Debug toggle + banner */
+    .dbg-btn{
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.06);
+      color:var(--text);
+      padding:6px 10px;
+      border-radius:10px;
+      font-weight:700;
+      cursor:pointer;
+      user-select:none;
+      font-size:12px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .dbg-btn:active{transform:scale(0.99);}
+    .dbg{
+      display:none;
+      margin-top:10px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px dashed rgba(125,211,252,.6);
+      background:rgba(16,24,38,.6);
+      font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+      color:#d8eaff;
+      font-size:12px;
+      line-height:1.35;
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
+    .dbg.show{display:block;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="title">
+        <div class="title-row">
+          <h1>DL&W Station</h1>
+        </div>
+        <div class="subtitle">
+          <span id="serviceBadge" class="badge">—</span>
+          <span>Next 3 scheduled departures • Northbound only</span>
+        </div>
+        <div id="dbg" class="dbg"></div>
+      </div>
+      <div class="clock">
+        <div class="time" id="clockTime">--:--:--</div>
+        <div class="date" id="clockDate">---</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Northbound <span class="pill" id="nbPill">loading…</span></h2>
+        <table>
+          <colgroup>
+            <col class="c-time" />
+            <col class="c-dir" />
+            <col class="c-in" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Scheduled Time</th>
+              <th>Train Direction</th>
+              <th style="text-align:right;">Departs In</th>
+            </tr>
+          </thead>
+          <tbody id="nbRows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div>
+        <span class="small">Data:</span>
+        <span id="feedStatus" class="status-ok">Embedded GTFS</span>
+        <span class="small">• GTFS dated</span>
+        <span id="gtfsDated">2026-01-29 14:04</span>
+        <span class="small">• Built</span>
+        <span id="builtAt">2026-02-03 04:35</span>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <div class="small">Refresh: schedule every 10s • Clock every 1s</div>
+        <button class="dbg-btn" id="dbgBtn" title="Toggle debug (or press D)">Debug</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const params = new URLSearchParams(location.search);
+  const ua = navigator.userAgent || "";
+  const isOptiSigns = /optisigns/i.test(ua);
+  const forceSignage = params.has("signage") && params.get("signage") !== "0";
+  if (isOptiSigns || forceSignage) document.documentElement.classList.add("signage");
+})();
+
+const TZ = "America/New_York";
+const STATION_STOP_IDS = new Set(["R10354","R11829"]);
+const STATION_NAME = "DL&W Station";
+const BUILD_META = {"gtfs_dated":"2026-01-29 14:04","built_at":"2026-02-03 04:35"};
+
+// Embedded minimal GTFS subset for this station page:
+const CALENDAR_DATES = [{"service_id":"1","date":"20260131","exception_type":"1"},{"service_id":"2","date":"20260207","exception_type":"1"},{"service_id":"2","date":"20260214","exception_type":"1"},{"service_id":"2","date":"20260221","exception_type":"1"},{"service_id":"2","date":"20260228","exception_type":"1"},{"service_id":"3","date":"20260201","exception_type":"1"},{"service_id":"3","date":"20260208","exception_type":"1"},{"service_id":"3","date":"20260215","exception_type":"1"},{"service_id":"3","date":"20260222","exception_type":"1"},{"service_id":"4","date":"20260129","exception_type":"1"},{"service_id":"4","date":"20260130","exception_type":"1"},{"service_id":"5","date":"20260202","exception_type":"1"},{"service_id":"5","date":"20260203","exception_type":"1"},{"service_id":"5","date":"20260204","exception_type":"1"},{"service_id":"5","date":"20260205","exception_type":"1"},{"service_id":"5","date":"20260206","exception_type":"1"},{"service_id":"5","date":"20260209","exception_type":"1"},{"service_id":"5","date":"20260210","exception_type":"1"},{"service_id":"5","date":"20260211","exception_type":"1"},{"service_id":"5","date":"20260212","exception_type":"1"},{"service_id":"5","date":"20260213","exception_type":"1"},{"service_id":"5","date":"20260216","exception_type":"1"},{"service_id":"5","date":"20260217","exception_type":"1"},{"service_id":"5","date":"20260218","exception_type":"1"},{"service_id":"5","date":"20260219","exception_type":"1"},{"service_id":"5","date":"20260220","exception_type":"1"},{"service_id":"5","date":"20260223","exception_type":"1"},{"service_id":"5","date":"20260224","exception_type":"1"},{"service_id":"5","date":"20260225","exception_type":"1"},{"service_id":"5","date":"20260226","exception_type":"1"},{"service_id":"5","date":"20260227","exception_type":"1"}]; // [{service_id,date,exception_type},...]
+const TRIPS = {"327":{"service_id":"1","direction_id":"1"},"158":{"service_id":"3","direction_id":"0"},"369":{"service_id":"2","direction_id":"1"},"494":{"service_id":"4","direction_id":"1"},"409":{"service_id":"2","direction_id":"1"},"130":{"service_id":"3","direction_id":"0"},"370":{"service_id":"2","direction_id":"1"},"477":{"service_id":"4","direction_id":"1"},"286":{"service_id":"5","direction_id":"0"},"391":{"service_id":"2","direction_id":"1"},"548":{"service_id":"5","direction_id":"1"},"93":{"service_id":"2","direction_id":"0"},"283":{"service_id":"5","direction_id":"0"},"247":{"service_id":"5","direction_id":"0"},"185":{"service_id":"4","direction_id":"0"},"498":{"service_id":"4","direction_id":"1"},"508":{"service_id":"4","direction_id":"1"},"41":{"service_id":"1","direction_id":"0"},"66":{"service_id":"2","direction_id":"0"},"140":{"service_id":"3","direction_id":"0"},"583":{"service_id":"5","direction_id":"1"},"504":{"service_id":"4","direction_id":"1"},"161":{"service_id":"4","direction_id":"0"},"516":{"service_id":"5","direction_id":"1"},"184":{"service_id":"4","direction_id":"0"},"214":{"service_id":"4","direction_id":"0"},"297":{"service_id":"5","direction_id":"0"},"151":{"service_id":"3","direction_id":"0"},"138":{"service_id":"3","direction_id":"0"},"589":{"service_id":"5","direction_id":"1"},"178":{"service_id":"4","direction_id":"0"},"118":{"service_id":"3","direction_id":"0"},"451":{"service_id":"3","direction_id":"1"},"402":{"service_id":"2","direction_id":"1"},"143":{"service_id":"3","direction_id":"0"},"15":{"service_id":"1","direction_id":"0"},"354":{"service_id":"2","direction_id":"1"},"512":{"service_id":"4","direction_id":"1"},"5":{"service_id":"1","direction_id":"0"},"200":{"service_id":"4","direction_id":"0"},"436":{"service_id":"3","direction_id":"1"},"374":{"service_id":"2","direction_id":"1"},"363":{"service_id":"2","direction_id":"1"},"565":{"service_id":"5","direction_id":"1"},"6":{"service_id":"1","direction_id":"0"},"263":{"service_id":"5","direction_id":"0"},"209":{"service_id":"4","direction_id":"0"},"156":{"service_id":"3","direction_id":"0"},"404":{"service_id":"2","direction_id":"1"},"219":{"service_id":"5","direction_id":"0"},"71":{"service_id":"2","direction_id":"0"},"245":{"service_id":"5","direction_id":"0"},"323":{"service_id":"1","direction_id":"1"},"523":{"service_id":"5","direction_id":"1"},"483":{"service_id":"4","direction_id":"1"},"342":{"service_id":"1","direction_id":"1"},"570":{"service_id":"5","direction_id":"1"},"153":{"service_id":"3","direction_id":"0"},"256":{"service_id":"5","direction_id":"0"},"77":{"service_id":"2","direction_id":"0"},"82":{"service_id":"2","direction_id":"0"},"73":{"service_id":"2","direction_id":"0"},"302":{"service_id":"1","direction_id":"1"},"61":{"service_id":"2","direction_id":"0"},"541":{"service_id":"5","direction_id":"1"},"329":{"service_id":"1","direction_id":"1"},"137":{"service_id":"3","direction_id":"0"},"107":{"service_id":"2","direction_id":"0"},"266":{"service_id":"5","direction_id":"0"},"408":{"service_id":"2","direction_id":"1"},"426":{"service_id":"3","direction_id":"1"},"387":{"service_id":"2","direction_id":"1"},"401":{"service_id":"2","direction_id":"1"},"502":{"service_id":"4","direction_id":"1"},"270":{"service_id":"5","direction_id":"0"},"358":{"service_id":"2","direction_id":"1"},"368":{"service_id":"2","direction_id":"1"},"581":{"service_id":"5","direction_id":"1"},"69":{"service_id":"2","direction_id":"0"},"244":{"service_id":"5","direction_id":"0"},"334":{"service_id":"1","direction_id":"1"},"293":{"service_id":"5","direction_id":"0"},"406":{"service_id":"2","direction_id":"1"},"298":{"service_id":"1","direction_id":"1"},"407":{"service_id":"2","direction_id":"1"},"45":{"service_id":"1","direction_id":"0"},"119":{"service_id":"3","direction_id":"0"},"394":{"service_id":"2","direction_id":"1"},"434":{"service_id":"3","direction_id":"1"},"555":{"service_id":"5","direction_id":"1"},"331":{"service_id":"1","direction_id":"1"},"57":{"service_id":"2","direction_id":"0"},"99":{"service_id":"2","direction_id":"0"},"67":{"service_id":"2","direction_id":"0"},"220":{"service_id":"5","direction_id":"0"},"375":{"service_id":"2","direction_id":"1"},"466":{"service_id":"4","direction_id":"1"},"473":{"service_id":"4","direction_id":"1"},"81":{"service_id":"2","direction_id":"0"},"353":{"service_id":"2","direction_id":"1"},"348":{"service_id":"1","direction_id":"1"},"96":{"service_id":"2","direction_id":"0"},"505":{"service_id":"4","direction_id":"1"},"106":{"service_id":"2","direction_id":"0"},"438":{"service_id":"3","direction_id":"1"},"248":{"service_id":"5","direction_id":"0"},"128":{"service_id":"3","direction_id":"0"},"79":{"service_id":"2","direction_id":"0"},"9":{"service_id":"1","direction_id":"0"},"34":{"service_id":"1","direction_id":"0"},"203":{"service_id":"4","direction_id":"0"},"552":{"service_id":"5","direction_id":"1"},"100":{"service_id":"2","direction_id":"0"},"590":{"service_id":"5","direction_id":"1"},"509":{"service_id":"4","direction_id":"1"},"284":{"service_id":"5","direction_id":"0"},"485":{"service_id":"4","direction_id":"1"},"445":{"service_id":"3","direction_id":"1"},"144":{"service_id":"3","direction_id":"0"},"265":{"service_id":"5","direction_id":"0"},"482":{"service_id":"4","direction_id":"1"},"139":{"service_id":"3","direction_id":"0"},"428":{"service_id":"3","direction_id":"1"},"495":{"service_id":"4","direction_id":"1"},"243":{"service_id":"5","direction_id":"0"},"145":{"service_id":"3","direction_id":"0"},"299":{"service_id":"1","direction_id":"1"},"514":{"service_id":"4","direction_id":"1"},"362":{"service_id":"2","direction_id":"1"},"242":{"service_id":"5","direction_id":"0"},"472":{"service_id":"4","direction_id":"1"},"48":{"service_id":"1","direction_id":"0"},"347":{"service_id":"1","direction_id":"1"},"525":{"service_id":"5","direction_id":"1"},"287":{"service_id":"5","direction_id":"0"},"361":{"service_id":"2","direction_id":"1"},"517":{"service_id":"5","direction_id":"1"},"456":{"service_id":"3","direction_id":"1"},"339":{"service_id":"1","direction_id":"1"},"463":{"service_id":"4","direction_id":"1"},"89":{"service_id":"2","direction_id":"0"},"317":{"service_id":"1","direction_id":"1"},"492":{"service_id":"4","direction_id":"1"},"532":{"service_id":"5","direction_id":"1"},"371":{"service_id":"2","direction_id":"1"},"228":{"service_id":"5","direction_id":"0"},"49":{"service_id":"1","direction_id":"0"},"576":{"service_id":"5","direction_id":"1"},"395":{"service_id":"2","direction_id":"1"},"191":{"service_id":"4","direction_id":"0"},"564":{"service_id":"5","direction_id":"1"},"425":{"service_id":"3","direction_id":"1"},"403":{"service_id":"2","direction_id":"1"},"458":{"service_id":"4","direction_id":"1"},"88":{"service_id":"2","direction_id":"0"},"149":{"service_id":"3","direction_id":"0"},"519":{"service_id":"5","direction_id":"1"},"296":{"service_id":"5","direction_id":"0"},"513":{"service_id":"4","direction_id":"1"},"518":{"service_id":"5","direction_id":"1"},"462":{"service_id":"4","direction_id":"1"},"562":{"service_id":"5","direction_id":"1"},"324":{"service_id":"1","direction_id":"1"},"416":{"service_id":"3","direction_id":"1"},"563":{"service_id":"5","direction_id":"1"},"212":{"service_id":"4","direction_id":"0"},"22":{"service_id":"1","direction_id":"0"},"479":{"service_id":"4","direction_id":"1"},"328":{"service_id":"1","direction_id":"1"},"255":{"service_id":"5","direction_id":"0"},"264":{"service_id":"5","direction_id":"0"},"558":{"service_id":"5","direction_id":"1"},"461":{"service_id":"4","direction_id":"1"},"131":{"service_id":"3","direction_id":"0"},"440":{"service_id":"3","direction_id":"1"},"127":{"service_id":"3","direction_id":"0"},"359":{"service_id":"2","direction_id":"1"},"23":{"service_id":"1","direction_id":"0"},"566":{"service_id":"5","direction_id":"1"},"176":{"service_id":"4","direction_id":"0"},"422":{"service_id":"3","direction_id":"1"},"379":{"service_id":"2","direction_id":"1"},"169":{"service_id":"4","direction_id":"0"},"325":{"service_id":"1","direction_id":"1"},"439":{"service_id":"3","direction_id":"1"},"225":{"service_id":"5","direction_id":"0"},"251":{"service_id":"5","direction_id":"0"},"202":{"service_id":"4","direction_id":"0"},"554":{"service_id":"5","direction_id":"1"},"199":{"service_id":"4","direction_id":"0"},"146":{"service_id":"3","direction_id":"0"},"188":{"service_id":"4","direction_id":"0"},"213":{"service_id":"4","direction_id":"0"},"83":{"service_id":"2","direction_id":"0"},"12":{"service_id":"1","direction_id":"0"},"432":{"service_id":"3","direction_id":"1"},"111":{"service_id":"2","direction_id":"0"},"527":{"service_id":"5","direction_id":"1"},"142":{"service_id":"3","direction_id":"0"},"70":{"service_id":"2","direction_id":"0"},"290":{"service_id":"5","direction_id":"0"},"537":{"service_id":"5","direction_id":"1"},"410":{"service_id":"2","direction_id":"1"},"568":{"service_id":"5","direction_id":"1"},"542":{"service_id":"5","direction_id":"1"},"386":{"service_id":"2","direction_id":"1"},"452":{"service_id":"3","direction_id":"1"},"534":{"service_id":"5","direction_id":"1"},"316":{"service_id":"1","direction_id":"1"},"157":{"service_id":"3","direction_id":"0"},"250":{"service_id":"5","direction_id":"0"},"115":{"service_id":"3","direction_id":"0"},"522":{"service_id":"5","direction_id":"1"},"417":{"service_id":"3","direction_id":"1"},"227":{"service_id":"5","direction_id":"0"},"453":{"service_id":"3","direction_id":"1"},"174":{"service_id":"4","direction_id":"0"},"180":{"service_id":"4","direction_id":"0"},"43":{"service_id":"1","direction_id":"0"},"414":{"service_id":"3","direction_id":"1"},"35":{"service_id":"1","direction_id":"0"},"481":{"service_id":"4","direction_id":"1"},"510":{"service_id":"4","direction_id":"1"},"384":{"service_id":"2","direction_id":"1"},"59":{"service_id":"2","direction_id":"0"},"132":{"service_id":"3","direction_id":"0"},"307":{"service_id":"1","direction_id":"1"},"529":{"service_id":"5","direction_id":"1"},"74":{"service_id":"2","direction_id":"0"},"457":{"service_id":"3","direction_id":"1"},"236":{"service_id":"5","direction_id":"0"},"135":{"service_id":"3","direction_id":"0"},"493":{"service_id":"4","direction_id":"1"},"208":{"service_id":"4","direction_id":"0"},"392":{"service_id":"2","direction_id":"1"},"418":{"service_id":"3","direction_id":"1"},"186":{"service_id":"4","direction_id":"0"},"30":{"service_id":"1","direction_id":"0"},"573":{"service_id":"5","direction_id":"1"},"381":{"service_id":"2","direction_id":"1"},"587":{"service_id":"5","direction_id":"1"},"306":{"service_id":"1","direction_id":"1"},"377":{"service_id":"2","direction_id":"1"},"484":{"service_id":"4","direction_id":"1"},"533":{"service_id":"5","direction_id":"1"},"37":{"service_id":"1","direction_id":"0"},"380":{"service_id":"2","direction_id":"1"},"21":{"service_id":"1","direction_id":"0"},"3":{"service_id":"1","direction_id":"0"},"578":{"service_id":"5","direction_id":"1"},"496":{"service_id":"4","direction_id":"1"},"253":{"service_id":"5","direction_id":"0"},"490":{"service_id":"4","direction_id":"1"},"91":{"service_id":"2","direction_id":"0"},"577":{"service_id":"5","direction_id":"1"},"567":{"service_id":"5","direction_id":"1"},"85":{"service_id":"2","direction_id":"0"},"54":{"service_id":"2","direction_id":"0"},"192":{"service_id":"4","direction_id":"0"},"42":{"service_id":"1","direction_id":"0"},"553":{"service_id":"5","direction_id":"1"},"64":{"service_id":"2","direction_id":"0"},"112":{"service_id":"2","direction_id":"0"},"121":{"service_id":"3","direction_id":"0"},"249":{"service_id":"5","direction_id":"0"},"424":{"service_id":"3","direction_id":"1"},"480":{"service_id":"4","direction_id":"1"},"269":{"service_id":"5","direction_id":"0"},"105":{"service_id":"2","direction_id":"0"},"201":{"service_id":"4","direction_id":"0"},"126":{"service_id":"3","direction_id":"0"},"62":{"service_id":"2","direction_id":"0"},"278":{"service_id":"5","direction_id":"0"},"470":{"service_id":"4","direction_id":"1"},"433":{"service_id":"3","direction_id":"1"},"346":{"service_id":"1","direction_id":"1"},"468":{"service_id":"4","direction_id":"1"},"167":{"service_id":"4","direction_id":"0"},"40":{"service_id":"1","direction_id":"0"},"448":{"service_id":"3","direction_id":"1"},"26":{"service_id":"1","direction_id":"0"},"222":{"service_id":"5","direction_id":"0"},"189":{"service_id":"4","direction_id":"0"},"326":{"service_id":"1","direction_id":"1"},"8":{"service_id":"1","direction_id":"0"},"572":{"service_id":"5","direction_id":"1"},"104":{"service_id":"2","direction_id":"0"},"197":{"service_id":"4","direction_id":"0"},"262":{"service_id":"5","direction_id":"0"},"500":{"service_id":"4","direction_id":"1"},"72":{"service_id":"2","direction_id":"0"},"281":{"service_id":"5","direction_id":"0"},"60":{"service_id":"2","direction_id":"0"},"159":{"service_id":"3","direction_id":"0"},"405":{"service_id":"2","direction_id":"1"},"521":{"service_id":"5","direction_id":"1"},"543":{"service_id":"5","direction_id":"1"},"487":{"service_id":"4","direction_id":"1"},"503":{"service_id":"4","direction_id":"1"},"164":{"service_id":"4","direction_id":"0"},"124":{"service_id":"3","direction_id":"0"},"575":{"service_id":"5","direction_id":"1"},"4":{"service_id":"1","direction_id":"0"},"310":{"service_id":"1","direction_id":"1"},"221":{"service_id":"5","direction_id":"0"},"378":{"service_id":"2","direction_id":"1"},"383":{"service_id":"2","direction_id":"1"},"196":{"service_id":"4","direction_id":"0"},"420":{"service_id":"3","direction_id":"1"},"561":{"service_id":"5","direction_id":"1"},"90":{"service_id":"2","direction_id":"0"},"109":{"service_id":"2","direction_id":"0"},"113":{"service_id":"2","direction_id":"0"},"450":{"service_id":"3","direction_id":"1"},"314":{"service_id":"1","direction_id":"1"},"388":{"service_id":"2","direction_id":"1"},"55":{"service_id":"2","direction_id":"0"},"207":{"service_id":"4","direction_id":"0"},"28":{"service_id":"1","direction_id":"0"},"389":{"service_id":"2","direction_id":"1"},"412":{"service_id":"3","direction_id":"1"},"218":{"service_id":"4","direction_id":"0"},"68":{"service_id":"2","direction_id":"0"},"488":{"service_id":"4","direction_id":"1"},"232":{"service_id":"5","direction_id":"0"},"148":{"service_id":"3","direction_id":"0"},"476":{"service_id":"4","direction_id":"1"},"398":{"service_id":"2","direction_id":"1"},"190":{"service_id":"4","direction_id":"0"},"330":{"service_id":"1","direction_id":"1"},"285":{"service_id":"5","direction_id":"0"},"217":{"service_id":"4","direction_id":"0"},"594":{"service_id":"5","direction_id":"1"},"162":{"service_id":"4","direction_id":"0"},"110":{"service_id":"2","direction_id":"0"},"240":{"service_id":"5","direction_id":"0"},"447":{"service_id":"3","direction_id":"1"},"475":{"service_id":"4","direction_id":"1"},"300":{"service_id":"1","direction_id":"1"},"259":{"service_id":"5","direction_id":"0"},"171":{"service_id":"4","direction_id":"0"},"36":{"service_id":"1","direction_id":"0"},"86":{"service_id":"2","direction_id":"0"},"343":{"service_id":"1","direction_id":"1"},"511":{"service_id":"4","direction_id":"1"},"591":{"service_id":"5","direction_id":"1"},"559":{"service_id":"5","direction_id":"1"},"471":{"service_id":"4","direction_id":"1"},"152":{"service_id":"3","direction_id":"0"},"17":{"service_id":"1","direction_id":"0"},"16":{"service_id":"1","direction_id":"0"},"102":{"service_id":"2","direction_id":"0"},"318":{"service_id":"1","direction_id":"1"},"308":{"service_id":"1","direction_id":"1"},"489":{"service_id":"4","direction_id":"1"},"233":{"service_id":"5","direction_id":"0"},"520":{"service_id":"5","direction_id":"1"},"235":{"service_id":"5","direction_id":"0"},"592":{"service_id":"5","direction_id":"1"},"305":{"service_id":"1","direction_id":"1"},"295":{"service_id":"5","direction_id":"0"},"38":{"service_id":"1","direction_id":"0"},"372":{"service_id":"2","direction_id":"1"},"19":{"service_id":"1","direction_id":"0"},"345":{"service_id":"1","direction_id":"1"},"173":{"service_id":"4","direction_id":"0"},"170":{"service_id":"4","direction_id":"0"},"313":{"service_id":"1","direction_id":"1"},"357":{"service_id":"2","direction_id":"1"},"524":{"service_id":"5","direction_id":"1"},"515":{"service_id":"4","direction_id":"1"},"116":{"service_id":"3","direction_id":"0"},"584":{"service_id":"5","direction_id":"1"},"449":{"service_id":"3","direction_id":"1"},"459":{"service_id":"4","direction_id":"1"},"571":{"service_id":"5","direction_id":"1"},"56":{"service_id":"2","direction_id":"0"},"292":{"service_id":"5","direction_id":"0"},"335":{"service_id":"1","direction_id":"1"},"530":{"service_id":"5","direction_id":"1"},"497":{"service_id":"4","direction_id":"1"},"239":{"service_id":"5","direction_id":"0"},"309":{"service_id":"1","direction_id":"1"},"2":{"service_id":"1","direction_id":"0"},"526":{"service_id":"5","direction_id":"1"},"95":{"service_id":"2","direction_id":"0"},"585":{"service_id":"5","direction_id":"1"},"75":{"service_id":"2","direction_id":"0"},"125":{"service_id":"3","direction_id":"0"},"320":{"service_id":"1","direction_id":"1"},"194":{"service_id":"4","direction_id":"0"},"352":{"service_id":"2","direction_id":"1"},"193":{"service_id":"4","direction_id":"0"},"172":{"service_id":"4","direction_id":"0"},"65":{"service_id":"2","direction_id":"0"},"165":{"service_id":"4","direction_id":"0"},"486":{"service_id":"4","direction_id":"1"},"39":{"service_id":"1","direction_id":"0"},"400":{"service_id":"2","direction_id":"1"},"421":{"service_id":"3","direction_id":"1"},"411":{"service_id":"2","direction_id":"1"},"393":{"service_id":"2","direction_id":"1"},"415":{"service_id":"3","direction_id":"1"},"550":{"service_id":"5","direction_id":"1"},"241":{"service_id":"5","direction_id":"0"},"252":{"service_id":"5","direction_id":"0"},"322":{"service_id":"1","direction_id":"1"},"13":{"service_id":"1","direction_id":"0"},"574":{"service_id":"5","direction_id":"1"},"464":{"service_id":"4","direction_id":"1"},"441":{"service_id":"3","direction_id":"1"},"442":{"service_id":"3","direction_id":"1"},"273":{"service_id":"5","direction_id":"0"},"98":{"service_id":"2","direction_id":"0"},"340":{"service_id":"1","direction_id":"1"},"376":{"service_id":"2","direction_id":"1"},"336":{"service_id":"1","direction_id":"1"},"47":{"service_id":"1","direction_id":"0"},"349":{"service_id":"1","direction_id":"1"},"396":{"service_id":"2","direction_id":"1"},"419":{"service_id":"3","direction_id":"1"},"582":{"service_id":"5","direction_id":"1"},"44":{"service_id":"1","direction_id":"0"},"365":{"service_id":"2","direction_id":"1"},"198":{"service_id":"4","direction_id":"0"},"1":{"service_id":"1","direction_id":"0"},"274":{"service_id":"5","direction_id":"0"},"303":{"service_id":"1","direction_id":"1"},"304":{"service_id":"1","direction_id":"1"},"276":{"service_id":"5","direction_id":"0"},"177":{"service_id":"4","direction_id":"0"},"229":{"service_id":"5","direction_id":"0"},"356":{"service_id":"2","direction_id":"1"},"53":{"service_id":"2","direction_id":"0"},"97":{"service_id":"2","direction_id":"0"},"385":{"service_id":"2","direction_id":"1"},"437":{"service_id":"3","direction_id":"1"},"551":{"service_id":"5","direction_id":"1"},"50":{"service_id":"1","direction_id":"0"},"205":{"service_id":"4","direction_id":"0"},"271":{"service_id":"5","direction_id":"0"},"301":{"service_id":"1","direction_id":"1"},"101":{"service_id":"2","direction_id":"0"},"350":{"service_id":"2","direction_id":"1"},"231":{"service_id":"5","direction_id":"0"},"166":{"service_id":"4","direction_id":"0"},"114":{"service_id":"2","direction_id":"0"},"366":{"service_id":"2","direction_id":"1"},"569":{"service_id":"5","direction_id":"1"},"216":{"service_id":"4","direction_id":"0"},"390":{"service_id":"2","direction_id":"1"},"547":{"service_id":"5","direction_id":"1"},"31":{"service_id":"1","direction_id":"0"},"147":{"service_id":"3","direction_id":"0"},"506":{"service_id":"4","direction_id":"1"},"261":{"service_id":"5","direction_id":"0"},"210":{"service_id":"4","direction_id":"0"},"29":{"service_id":"1","direction_id":"0"},"51":{"service_id":"1","direction_id":"0"},"351":{"service_id":"2","direction_id":"1"},"536":{"service_id":"5","direction_id":"1"},"499":{"service_id":"4","direction_id":"1"},"528":{"service_id":"5","direction_id":"1"},"254":{"service_id":"5","direction_id":"0"},"103":{"service_id":"2","direction_id":"0"},"155":{"service_id":"3","direction_id":"0"},"282":{"service_id":"5","direction_id":"0"},"443":{"service_id":"3","direction_id":"1"},"355":{"service_id":"2","direction_id":"1"},"150":{"service_id":"3","direction_id":"0"},"92":{"service_id":"2","direction_id":"0"},"25":{"service_id":"1","direction_id":"0"},"87":{"service_id":"2","direction_id":"0"},"32":{"service_id":"1","direction_id":"0"},"413":{"service_id":"3","direction_id":"1"},"195":{"service_id":"4","direction_id":"0"},"246":{"service_id":"5","direction_id":"0"},"341":{"service_id":"1","direction_id":"1"},"182":{"service_id":"4","direction_id":"0"},"507":{"service_id":"4","direction_id":"1"},"80":{"service_id":"2","direction_id":"0"},"20":{"service_id":"1","direction_id":"0"},"141":{"service_id":"3","direction_id":"0"},"491":{"service_id":"4","direction_id":"1"},"11":{"service_id":"1","direction_id":"0"},"586":{"service_id":"5","direction_id":"1"},"84":{"service_id":"2","direction_id":"0"},"321":{"service_id":"1","direction_id":"1"},"373":{"service_id":"2","direction_id":"1"},"238":{"service_id":"5","direction_id":"0"},"444":{"service_id":"3","direction_id":"1"},"122":{"service_id":"3","direction_id":"0"},"311":{"service_id":"1","direction_id":"1"},"288":{"service_id":"5","direction_id":"0"},"136":{"service_id":"3","direction_id":"0"},"364":{"service_id":"2","direction_id":"1"},"454":{"service_id":"3","direction_id":"1"},"133":{"service_id":"3","direction_id":"0"},"160":{"service_id":"3","direction_id":"0"},"544":{"service_id":"5","direction_id":"1"},"260":{"service_id":"5","direction_id":"0"},"277":{"service_id":"5","direction_id":"0"},"10":{"service_id":"1","direction_id":"0"},"460":{"service_id":"4","direction_id":"1"},"319":{"service_id":"1","direction_id":"1"},"52":{"service_id":"1","direction_id":"0"},"289":{"service_id":"5","direction_id":"0"},"427":{"service_id":"3","direction_id":"1"},"94":{"service_id":"2","direction_id":"0"},"223":{"service_id":"5","direction_id":"0"},"257":{"service_id":"5","direction_id":"0"},"501":{"service_id":"4","direction_id":"1"},"540":{"service_id":"5","direction_id":"1"},"268":{"service_id":"5","direction_id":"0"},"224":{"service_id":"5","direction_id":"0"},"435":{"service_id":"3","direction_id":"1"},"465":{"service_id":"4","direction_id":"1"},"399":{"service_id":"2","direction_id":"1"},"538":{"service_id":"5","direction_id":"1"},"237":{"service_id":"5","direction_id":"0"},"108":{"service_id":"2","direction_id":"0"},"469":{"service_id":"4","direction_id":"1"},"397":{"service_id":"2","direction_id":"1"},"33":{"service_id":"1","direction_id":"0"},"168":{"service_id":"4","direction_id":"0"},"120":{"service_id":"3","direction_id":"0"},"187":{"service_id":"4","direction_id":"0"},"76":{"service_id":"2","direction_id":"0"},"27":{"service_id":"1","direction_id":"0"},"78":{"service_id":"2","direction_id":"0"},"332":{"service_id":"1","direction_id":"1"},"279":{"service_id":"5","direction_id":"0"},"431":{"service_id":"3","direction_id":"1"},"211":{"service_id":"4","direction_id":"0"},"382":{"service_id":"2","direction_id":"1"},"580":{"service_id":"5","direction_id":"1"},"593":{"service_id":"5","direction_id":"1"},"46":{"service_id":"1","direction_id":"0"},"557":{"service_id":"5","direction_id":"1"},"181":{"service_id":"4","direction_id":"0"},"215":{"service_id":"4","direction_id":"0"},"123":{"service_id":"3","direction_id":"0"},"423":{"service_id":"3","direction_id":"1"},"129":{"service_id":"3","direction_id":"0"},"539":{"service_id":"5","direction_id":"1"},"360":{"service_id":"2","direction_id":"1"},"474":{"service_id":"4","direction_id":"1"},"206":{"service_id":"4","direction_id":"0"},"478":{"service_id":"4","direction_id":"1"},"531":{"service_id":"5","direction_id":"1"},"545":{"service_id":"5","direction_id":"1"},"312":{"service_id":"1","direction_id":"1"},"588":{"service_id":"5","direction_id":"1"},"280":{"service_id":"5","direction_id":"0"},"183":{"service_id":"4","direction_id":"0"},"267":{"service_id":"5","direction_id":"0"},"579":{"service_id":"5","direction_id":"1"},"446":{"service_id":"3","direction_id":"1"},"275":{"service_id":"5","direction_id":"0"},"291":{"service_id":"5","direction_id":"0"},"63":{"service_id":"2","direction_id":"0"},"18":{"service_id":"1","direction_id":"0"},"117":{"service_id":"3","direction_id":"0"},"134":{"service_id":"3","direction_id":"0"},"163":{"service_id":"4","direction_id":"0"},"467":{"service_id":"4","direction_id":"1"},"234":{"service_id":"5","direction_id":"0"},"344":{"service_id":"1","direction_id":"1"},"226":{"service_id":"5","direction_id":"0"},"549":{"service_id":"5","direction_id":"1"},"24":{"service_id":"1","direction_id":"0"},"367":{"service_id":"2","direction_id":"1"},"455":{"service_id":"3","direction_id":"1"},"546":{"service_id":"5","direction_id":"1"},"337":{"service_id":"1","direction_id":"1"},"230":{"service_id":"5","direction_id":"0"},"294":{"service_id":"5","direction_id":"0"},"272":{"service_id":"5","direction_id":"0"},"204":{"service_id":"4","direction_id":"0"},"430":{"service_id":"3","direction_id":"1"},"258":{"service_id":"5","direction_id":"0"},"429":{"service_id":"3","direction_id":"1"},"14":{"service_id":"1","direction_id":"0"},"154":{"service_id":"3","direction_id":"0"},"333":{"service_id":"1","direction_id":"1"},"556":{"service_id":"5","direction_id":"1"},"560":{"service_id":"5","direction_id":"1"},"535":{"service_id":"5","direction_id":"1"},"58":{"service_id":"2","direction_id":"0"},"7":{"service_id":"1","direction_id":"0"},"315":{"service_id":"1","direction_id":"1"},"179":{"service_id":"4","direction_id":"0"},"338":{"service_id":"1","direction_id":"1"},"175":{"service_id":"4","direction_id":"0"}};        // trip_id -> {service_id, direction_id}
+const DEPS  = [{"trip_id":"298","stop_id":"R10354","departure_time":"06:47:00"},{"trip_id":"299","stop_id":"R10354","departure_time":"07:07:00"},{"trip_id":"300","stop_id":"R10354","departure_time":"07:27:00"},{"trip_id":"301","stop_id":"R10354","departure_time":"07:47:00"},{"trip_id":"302","stop_id":"R10354","departure_time":"08:07:00"},{"trip_id":"303","stop_id":"R10354","departure_time":"08:27:00"},{"trip_id":"304","stop_id":"R10354","departure_time":"08:47:00"},{"trip_id":"305","stop_id":"R10354","departure_time":"09:07:00"},{"trip_id":"306","stop_id":"R10354","departure_time":"09:27:00"},{"trip_id":"307","stop_id":"R10354","departure_time":"09:47:00"},{"trip_id":"308","stop_id":"R10354","departure_time":"10:07:00"},{"trip_id":"309","stop_id":"R10354","departure_time":"10:27:00"},{"trip_id":"310","stop_id":"R10354","departure_time":"10:47:00"},{"trip_id":"311","stop_id":"R10354","departure_time":"11:07:00"},{"trip_id":"312","stop_id":"R10354","departure_time":"11:27:00"},{"trip_id":"313","stop_id":"R10354","departure_time":"11:47:00"},{"trip_id":"314","stop_id":"R10354","departure_time":"12:07:00"},{"trip_id":"315","stop_id":"R10354","departure_time":"12:27:00"},{"trip_id":"316","stop_id":"R10354","departure_time":"12:47:00"},{"trip_id":"317","stop_id":"R10354","departure_time":"13:07:00"},{"trip_id":"318","stop_id":"R10354","departure_time":"13:27:00"},{"trip_id":"319","stop_id":"R10354","departure_time":"13:47:00"},{"trip_id":"320","stop_id":"R10354","departure_time":"14:07:00"},{"trip_id":"321","stop_id":"R10354","departure_time":"14:27:00"},{"trip_id":"322","stop_id":"R10354","departure_time":"14:47:00"},{"trip_id":"323","stop_id":"R10354","departure_time":"15:07:00"},{"trip_id":"324","stop_id":"R10354","departure_time":"15:27:00"},{"trip_id":"325","stop_id":"R10354","departure_time":"15:47:00"},{"trip_id":"326","stop_id":"R10354","departure_time":"16:07:00"},{"trip_id":"327","stop_id":"R10354","departure_time":"16:27:00"},{"trip_id":"328","stop_id":"R10354","departure_time":"16:47:00"},{"trip_id":"329","stop_id":"R10354","departure_time":"17:07:00"},{"trip_id":"330","stop_id":"R10354","departure_time":"17:27:00"},{"trip_id":"331","stop_id":"R10354","departure_time":"17:47:00"},{"trip_id":"332","stop_id":"R10354","departure_time":"18:07:00"},{"trip_id":"333","stop_id":"R10354","departure_time":"18:27:00"},{"trip_id":"334","stop_id":"R10354","departure_time":"18:47:00"},{"trip_id":"335","stop_id":"R10354","departure_time":"19:07:00"},{"trip_id":"336","stop_id":"R10354","departure_time":"19:27:00"},{"trip_id":"337","stop_id":"R10354","departure_time":"19:47:00"},{"trip_id":"338","stop_id":"R10354","departure_time":"20:07:00"},{"trip_id":"339","stop_id":"R10354","departure_time":"20:27:00"},{"trip_id":"340","stop_id":"R10354","departure_time":"20:47:00"},{"trip_id":"341","stop_id":"R10354","departure_time":"21:07:00"},{"trip_id":"342","stop_id":"R10354","departure_time":"21:27:00"},{"trip_id":"343","stop_id":"R10354","departure_time":"21:47:00"},{"trip_id":"344","stop_id":"R10354","departure_time":"22:07:00"},{"trip_id":"345","stop_id":"R10354","departure_time":"22:27:00"},{"trip_id":"346","stop_id":"R10354","departure_time":"22:47:00"},{"trip_id":"347","stop_id":"R10354","departure_time":"23:07:00"},{"trip_id":"348","stop_id":"R10354","departure_time":"23:27:00"},{"trip_id":"349","stop_id":"R10354","departure_time":"23:47:00"},{"trip_id":"350","stop_id":"R10354","departure_time":"07:02:00"},{"trip_id":"351","stop_id":"R10354","departure_time":"07:22:00"},{"trip_id":"352","stop_id":"R10354","departure_time":"07:42:00"},{"trip_id":"353","stop_id":"R10354","departure_time":"08:02:00"},{"trip_id":"354","stop_id":"R10354","departure_time":"08:22:00"},{"trip_id":"355","stop_id":"R10354","departure_time":"08:42:00"},{"trip_id":"356","stop_id":"R10354","departure_time":"08:57:00"},{"trip_id":"357","stop_id":"R10354","departure_time":"09:12:00"},{"trip_id":"358","stop_id":"R10354","departure_time":"09:27:00"},{"trip_id":"359","stop_id":"R10354","departure_time":"09:42:00"},{"trip_id":"360","stop_id":"R10354","departure_time":"09:57:00"},{"trip_id":"361","stop_id":"R10354","departure_time":"10:12:00"},{"trip_id":"362","stop_id":"R10354","departure_time":"10:27:00"},{"trip_id":"363","stop_id":"R10354","departure_time":"10:42:00"},{"trip_id":"364","stop_id":"R10354","departure_time":"10:57:00"},{"trip_id":"365","stop_id":"R10354","departure_time":"11:12:00"},{"trip_id":"366","stop_id":"R10354","departure_time":"11:27:00"},{"trip_id":"367","stop_id":"R10354","departure_time":"11:42:00"},{"trip_id":"368","stop_id":"R10354","departure_time":"11:57:00"},{"trip_id":"369","stop_id":"R10354","departure_time":"12:12:00"},{"trip_id":"370","stop_id":"R10354","departure_time":"12:27:00"},{"trip_id":"371","stop_id":"R10354","departure_time":"12:42:00"},{"trip_id":"372","stop_id":"R10354","departure_time":"12:57:00"},{"trip_id":"373","stop_id":"R10354","departure_time":"13:12:00"},{"trip_id":"374","stop_id":"R10354","departure_time":"13:27:00"},{"trip_id":"375","stop_id":"R10354","departure_time":"13:42:00"},{"trip_id":"376","stop_id":"R10354","departure_time":"13:57:00"},{"trip_id":"377","stop_id":"R10354","departure_time":"14:12:00"},{"trip_id":"378","stop_id":"R10354","departure_time":"14:27:00"},{"trip_id":"379","stop_id":"R10354","departure_time":"14:42:00"},{"trip_id":"380","stop_id":"R10354","departure_time":"14:57:00"},{"trip_id":"381","stop_id":"R10354","departure_time":"15:12:00"},{"trip_id":"382","stop_id":"R10354","departure_time":"15:27:00"},{"trip_id":"383","stop_id":"R10354","departure_time":"15:42:00"},{"trip_id":"384","stop_id":"R10354","departure_time":"15:57:00"},{"trip_id":"385","stop_id":"R10354","departure_time":"16:12:00"},{"trip_id":"386","stop_id":"R10354","departure_time":"16:27:00"},{"trip_id":"387","stop_id":"R10354","departure_time":"16:42:00"},{"trip_id":"388","stop_id":"R10354","departure_time":"16:57:00"},{"trip_id":"389","stop_id":"R10354","departure_time":"17:12:00"},{"trip_id":"390","stop_id":"R10354","departure_time":"17:27:00"},{"trip_id":"391","stop_id":"R10354","departure_time":"17:42:00"},{"trip_id":"392","stop_id":"R10354","departure_time":"17:57:00"},{"trip_id":"393","stop_id":"R10354","departure_time":"18:12:00"},{"trip_id":"394","stop_id":"R10354","departure_time":"18:27:00"},{"trip_id":"395","stop_id":"R10354","departure_time":"18:42:00"},{"trip_id":"396","stop_id":"R10354","departure_time":"18:57:00"},{"trip_id":"397","stop_id":"R10354","departure_time":"19:17:00"},{"trip_id":"398","stop_id":"R10354","departure_time":"19:37:00"},{"trip_id":"399","stop_id":"R10354","departure_time":"19:57:00"},{"trip_id":"400","stop_id":"R10354","departure_time":"20:17:00"},{"trip_id":"401","stop_id":"R10354","departure_time":"20:37:00"},{"trip_id":"402","stop_id":"R10354","departure_time":"20:57:00"},{"trip_id":"403","stop_id":"R10354","departure_time":"21:17:00"},{"trip_id":"404","stop_id":"R10354","departure_time":"21:37:00"},{"trip_id":"405","stop_id":"R10354","departure_time":"21:57:00"},{"trip_id":"406","stop_id":"R10354","departure_time":"22:17:00"},{"trip_id":"407","stop_id":"R10354","departure_time":"22:37:00"},{"trip_id":"408","stop_id":"R10354","departure_time":"22:57:00"},{"trip_id":"409","stop_id":"R10354","departure_time":"23:17:00"},{"trip_id":"410","stop_id":"R10354","departure_time":"23:37:00"},{"trip_id":"411","stop_id":"R10354","departure_time":"23:57:00"},{"trip_id":"412","stop_id":"R10354","departure_time":"07:57:00"},{"trip_id":"413","stop_id":"R10354","departure_time":"08:17:00"},{"trip_id":"414","stop_id":"R10354","departure_time":"08:37:00"},{"trip_id":"415","stop_id":"R10354","departure_time":"08:57:00"},{"trip_id":"416","stop_id":"R10354","departure_time":"09:17:00"},{"trip_id":"417","stop_id":"R10354","departure_time":"09:37:00"},{"trip_id":"418","stop_id":"R10354","departure_time":"09:57:00"},{"trip_id":"419","stop_id":"R10354","departure_time":"10:17:00"},{"trip_id":"420","stop_id":"R10354","departure_time":"10:37:00"},{"trip_id":"421","stop_id":"R10354","departure_time":"10:57:00"},{"trip_id":"422","stop_id":"R10354","departure_time":"11:17:00"},{"trip_id":"423","stop_id":"R10354","departure_time":"11:37:00"},{"trip_id":"424","stop_id":"R10354","departure_time":"12:01:00"},{"trip_id":"425","stop_id":"R10354","departure_time":"12:21:00"},{"trip_id":"426","stop_id":"R10354","departure_time":"12:37:00"},{"trip_id":"427","stop_id":"R10354","departure_time":"12:57:00"},{"trip_id":"428","stop_id":"R10354","departure_time":"13:17:00"},{"trip_id":"429","stop_id":"R10354","departure_time":"13:37:00"},{"trip_id":"430","stop_id":"R10354","departure_time":"13:57:00"},{"trip_id":"431","stop_id":"R10354","departure_time":"14:17:00"},{"trip_id":"432","stop_id":"R10354","departure_time":"14:37:00"},{"trip_id":"433","stop_id":"R10354","departure_time":"14:57:00"},{"trip_id":"434","stop_id":"R10354","departure_time":"15:17:00"},{"trip_id":"435","stop_id":"R10354","departure_time":"15:37:00"},{"trip_id":"436","stop_id":"R10354","departure_time":"15:57:00"},{"trip_id":"437","stop_id":"R10354","departure_time":"16:17:00"},{"trip_id":"438","stop_id":"R10354","departure_time":"16:37:00"},{"trip_id":"439","stop_id":"R10354","departure_time":"16:57:00"},{"trip_id":"440","stop_id":"R10354","departure_time":"17:17:00"},{"trip_id":"441","stop_id":"R10354","departure_time":"17:37:00"},{"trip_id":"442","stop_id":"R10354","departure_time":"17:57:00"},{"trip_id":"443","stop_id":"R10354","departure_time":"18:17:00"},{"trip_id":"444","stop_id":"R10354","departure_time":"18:37:00"},{"trip_id":"445","stop_id":"R10354","departure_time":"18:57:00"},{"trip_id":"446","stop_id":"R10354","departure_time":"19:17:00"},{"trip_id":"447","stop_id":"R10354","departure_time":"19:37:00"},{"trip_id":"448","stop_id":"R10354","departure_time":"19:57:00"},{"trip_id":"449","stop_id":"R10354","departure_time":"20:17:00"},{"trip_id":"450","stop_id":"R10354","departure_time":"20:37:00"},{"trip_id":"451","stop_id":"R10354","departure_time":"20:57:00"},{"trip_id":"452","stop_id":"R10354","departure_time":"21:17:00"},{"trip_id":"453","stop_id":"R10354","departure_time":"21:37:00"},{"trip_id":"454","stop_id":"R10354","departure_time":"21:57:00"},{"trip_id":"455","stop_id":"R10354","departure_time":"22:17:00"},{"trip_id":"456","stop_id":"R10354","departure_time":"22:37:00"},{"trip_id":"457","stop_id":"R10354","departure_time":"22:57:00"},{"trip_id":"458","stop_id":"R10354","departure_time":"05:09:00"},{"trip_id":"459","stop_id":"R10354","departure_time":"05:29:00"},{"trip_id":"460","stop_id":"R10354","departure_time":"05:49:00"},{"trip_id":"461","stop_id":"R10354","departure_time":"06:09:00"},{"trip_id":"462","stop_id":"R10354","departure_time":"06:29:00"},{"trip_id":"463","stop_id":"R10354","departure_time":"06:49:00"},{"trip_id":"464","stop_id":"R10354","departure_time":"07:09:00"},{"trip_id":"465","stop_id":"R10354","departure_time":"07:29:00"},{"trip_id":"466","stop_id":"R10354","departure_time":"07:49:00"},{"trip_id":"467","stop_id":"R10354","departure_time":"08:09:00"},{"trip_id":"468","stop_id":"R10354","departure_time":"08:29:00"},{"trip_id":"469","stop_id":"R10354","departure_time":"08:49:00"},{"trip_id":"470","stop_id":"R10354","departure_time":"09:09:00"},{"trip_id":"471","stop_id":"R10354","departure_time":"09:29:00"},{"trip_id":"472","stop_id":"R10354","departure_time":"09:48:00"},{"trip_id":"473","stop_id":"R10354","departure_time":"10:08:00"},{"trip_id":"474","stop_id":"R10354","departure_time":"10:28:00"},{"trip_id":"475","stop_id":"R10354","departure_time":"10:48:00"},{"trip_id":"476","stop_id":"R10354","departure_time":"11:08:00"},{"trip_id":"477","stop_id":"R10354","departure_time":"11:28:00"},{"trip_id":"478","stop_id":"R10354","departure_time":"11:48:00"},{"trip_id":"479","stop_id":"R10354","departure_time":"12:08:00"},{"trip_id":"480","stop_id":"R10354","departure_time":"12:28:00"},{"trip_id":"481","stop_id":"R10354","departure_time":"12:48:00"},{"trip_id":"482","stop_id":"R10354","departure_time":"13:08:00"},{"trip_id":"483","stop_id":"R10354","departure_time":"13:28:00"},{"trip_id":"484","stop_id":"R10354","departure_time":"13:48:00"},{"trip_id":"485","stop_id":"R10354","departure_time":"14:08:00"},{"trip_id":"486","stop_id":"R10354","departure_time":"14:28:00"},{"trip_id":"487","stop_id":"R10354","departure_time":"14:48:00"},{"trip_id":"488","stop_id":"R10354","departure_time":"15:08:00"},{"trip_id":"489","stop_id":"R10354","departure_time":"15:28:00"},{"trip_id":"490","stop_id":"R10354","departure_time":"15:48:00"},{"trip_id":"491","stop_id":"R10354","departure_time":"16:08:00"},{"trip_id":"492","stop_id":"R10354","departure_time":"16:28:00"},{"trip_id":"493","stop_id":"R10354","departure_time":"16:48:00"},{"trip_id":"494","stop_id":"R10354","departure_time":"17:08:00"},{"trip_id":"495","stop_id":"R10354","departure_time":"17:28:00"},{"trip_id":"496","stop_id":"R10354","departure_time":"17:48:00"},{"trip_id":"497","stop_id":"R10354","departure_time":"18:08:00"},{"trip_id":"498","stop_id":"R10354","departure_time":"18:28:00"},{"trip_id":"499","stop_id":"R10354","departure_time":"18:48:00"},{"trip_id":"500","stop_id":"R10354","departure_time":"19:08:00"},{"trip_id":"501","stop_id":"R10354","departure_time":"19:28:00"},{"trip_id":"502","stop_id":"R10354","departure_time":"19:48:00"},{"trip_id":"503","stop_id":"R10354","departure_time":"20:08:00"},{"trip_id":"504","stop_id":"R10354","departure_time":"20:28:00"},{"trip_id":"505","stop_id":"R10354","departure_time":"20:48:00"},{"trip_id":"506","stop_id":"R10354","departure_time":"21:08:00"},{"trip_id":"507","stop_id":"R10354","departure_time":"21:28:00"},{"trip_id":"508","stop_id":"R10354","departure_time":"21:48:00"},{"trip_id":"509","stop_id":"R10354","departure_time":"22:08:00"},{"trip_id":"510","stop_id":"R10354","departure_time":"22:28:00"},{"trip_id":"511","stop_id":"R10354","departure_time":"22:48:00"},{"trip_id":"512","stop_id":"R10354","departure_time":"23:08:00"},{"trip_id":"513","stop_id":"R10354","departure_time":"23:28:00"},{"trip_id":"514","stop_id":"R10354","departure_time":"23:48:00"},{"trip_id":"515","stop_id":"R10354","departure_time":"24:08:00"},{"trip_id":"516","stop_id":"R10354","departure_time":"05:08:00"},{"trip_id":"517","stop_id":"R10354","departure_time":"05:27:00"},{"trip_id":"518","stop_id":"R10354","departure_time":"05:42:00"},{"trip_id":"519","stop_id":"R10354","departure_time":"05:57:00"},{"trip_id":"520","stop_id":"R10354","departure_time":"06:12:00"},{"trip_id":"521","stop_id":"R10354","departure_time":"06:24:00"},{"trip_id":"522","stop_id":"R10354","departure_time":"06:34:00"},{"trip_id":"523","stop_id":"R10354","departure_time":"06:45:00"},{"trip_id":"524","stop_id":"R10354","departure_time":"06:57:00"},{"trip_id":"525","stop_id":"R10354","departure_time":"07:09:00"},{"trip_id":"526","stop_id":"R10354","departure_time":"07:21:00"},{"trip_id":"527","stop_id":"R10354","departure_time":"07:33:00"},{"trip_id":"528","stop_id":"R10354","departure_time":"07:45:00"},{"trip_id":"529","stop_id":"R10354","departure_time":"07:57:00"},{"trip_id":"530","stop_id":"R10354","departure_time":"08:09:00"},{"trip_id":"531","stop_id":"R10354","departure_time":"08:21:00"},{"trip_id":"532","stop_id":"R10354","departure_time":"08:33:00"},{"trip_id":"533","stop_id":"R10354","departure_time":"08:45:00"},{"trip_id":"534","stop_id":"R10354","departure_time":"08:57:00"},{"trip_id":"535","stop_id":"R10354","departure_time":"09:12:00"},{"trip_id":"536","stop_id":"R10354","departure_time":"09:27:00"},{"trip_id":"537","stop_id":"R10354","departure_time":"09:44:00"},{"trip_id":"538","stop_id":"R10354","departure_time":"09:57:00"},{"trip_id":"539","stop_id":"R10354","departure_time":"10:12:00"},{"trip_id":"540","stop_id":"R10354","departure_time":"10:27:00"},{"trip_id":"541","stop_id":"R10354","departure_time":"10:42:00"},{"trip_id":"542","stop_id":"R10354","departure_time":"10:57:00"},{"trip_id":"543","stop_id":"R10354","departure_time":"11:12:00"},{"trip_id":"544","stop_id":"R10354","departure_time":"11:27:00"},{"trip_id":"545","stop_id":"R10354","departure_time":"11:42:00"},{"trip_id":"546","stop_id":"R10354","departure_time":"11:57:00"},{"trip_id":"547","stop_id":"R10354","departure_time":"12:12:00"},{"trip_id":"548","stop_id":"R10354","departure_time":"12:27:00"},{"trip_id":"549","stop_id":"R10354","departure_time":"12:42:00"},{"trip_id":"550","stop_id":"R10354","departure_time":"12:57:00"},{"trip_id":"551","stop_id":"R10354","departure_time":"13:12:00"},{"trip_id":"552","stop_id":"R10354","departure_time":"13:27:00"},{"trip_id":"553","stop_id":"R10354","departure_time":"13:42:00"},{"trip_id":"554","stop_id":"R10354","departure_time":"13:57:00"},{"trip_id":"555","stop_id":"R10354","departure_time":"14:09:00"},{"trip_id":"556","stop_id":"R10354","departure_time":"14:21:00"},{"trip_id":"557","stop_id":"R10354","departure_time":"14:33:00"},{"trip_id":"558","stop_id":"R10354","departure_time":"14:45:00"},{"trip_id":"559","stop_id":"R10354","departure_time":"14:57:00"},{"trip_id":"560","stop_id":"R10354","departure_time":"15:09:00"},{"trip_id":"561","stop_id":"R10354","departure_time":"15:21:00"},{"trip_id":"562","stop_id":"R10354","departure_time":"15:33:00"},{"trip_id":"563","stop_id":"R10354","departure_time":"15:47:00"},{"trip_id":"564","stop_id":"R10354","departure_time":"15:57:00"},{"trip_id":"565","stop_id":"R10354","departure_time":"16:09:00"},{"trip_id":"566","stop_id":"R10354","departure_time":"16:21:00"},{"trip_id":"567","stop_id":"R10354","departure_time":"16:33:00"},{"trip_id":"568","stop_id":"R10354","departure_time":"16:45:00"},{"trip_id":"569","stop_id":"R10354","departure_time":"16:57:00"},{"trip_id":"570","stop_id":"R10354","departure_time":"17:09:00"},{"trip_id":"571","stop_id":"R10354","departure_time":"17:21:00"},{"trip_id":"572","stop_id":"R10354","departure_time":"17:33:00"},{"trip_id":"573","stop_id":"R10354","departure_time":"17:45:00"},{"trip_id":"574","stop_id":"R10354","departure_time":"17:57:00"},{"trip_id":"575","stop_id":"R10354","departure_time":"18:12:00"},{"trip_id":"576","stop_id":"R10354","departure_time":"18:27:00"},{"trip_id":"577","stop_id":"R10354","departure_time":"18:44:00"},{"trip_id":"578","stop_id":"R10354","departure_time":"18:57:00"},{"trip_id":"579","stop_id":"R10354","departure_time":"19:12:00"},{"trip_id":"580","stop_id":"R10354","departure_time":"19:27:00"},{"trip_id":"581","stop_id":"R10354","departure_time":"19:42:00"},{"trip_id":"582","stop_id":"R10354","departure_time":"19:57:00"},{"trip_id":"583","stop_id":"R10354","departure_time":"20:17:00"},{"trip_id":"584","stop_id":"R10354","departure_time":"20:37:00"},{"trip_id":"585","stop_id":"R10354","departure_time":"20:57:00"},{"trip_id":"586","stop_id":"R10354","departure_time":"21:17:00"},{"trip_id":"587","stop_id":"R10354","departure_time":"21:37:00"},{"trip_id":"588","stop_id":"R10354","departure_time":"21:57:00"},{"trip_id":"589","stop_id":"R10354","departure_time":"22:19:00"},{"trip_id":"590","stop_id":"R10354","departure_time":"22:39:00"},{"trip_id":"591","stop_id":"R10354","departure_time":"22:59:00"},{"trip_id":"592","stop_id":"R10354","departure_time":"23:19:00"},{"trip_id":"593","stop_id":"R10354","departure_time":"23:39:00"},{"trip_id":"594","stop_id":"R10354","departure_time":"23:59:00"},{"trip_id":"1","stop_id":"R11829","departure_time":"07:43:00"},{"trip_id":"2","stop_id":"R11829","departure_time":"08:03:00"},{"trip_id":"3","stop_id":"R11829","departure_time":"08:23:00"},{"trip_id":"4","stop_id":"R11829","departure_time":"08:43:00"},{"trip_id":"5","stop_id":"R11829","departure_time":"09:03:00"},{"trip_id":"6","stop_id":"R11829","departure_time":"09:23:00"},{"trip_id":"7","stop_id":"R11829","departure_time":"09:43:00"},{"trip_id":"8","stop_id":"R11829","departure_time":"10:03:00"},{"trip_id":"9","stop_id":"R11829","departure_time":"10:23:00"},{"trip_id":"10","stop_id":"R11829","departure_time":"10:43:00"},{"trip_id":"11","stop_id":"R11829","departure_time":"11:03:00"},{"trip_id":"12","stop_id":"R11829","departure_time":"11:23:00"},{"trip_id":"13","stop_id":"R11829","departure_time":"11:43:00"},{"trip_id":"14","stop_id":"R11829","departure_time":"12:03:00"},{"trip_id":"15","stop_id":"R11829","departure_time":"12:23:00"},{"trip_id":"16","stop_id":"R11829","departure_time":"12:43:00"},{"trip_id":"17","stop_id":"R11829","departure_time":"13:03:00"},{"trip_id":"18","stop_id":"R11829","departure_time":"13:23:00"},{"trip_id":"19","stop_id":"R11829","departure_time":"13:43:00"},{"trip_id":"20","stop_id":"R11829","departure_time":"14:03:00"},{"trip_id":"21","stop_id":"R11829","departure_time":"14:23:00"},{"trip_id":"22","stop_id":"R11829","departure_time":"14:43:00"},{"trip_id":"23","stop_id":"R11829","departure_time":"15:03:00"},{"trip_id":"24","stop_id":"R11829","departure_time":"15:23:00"},{"trip_id":"25","stop_id":"R11829","departure_time":"15:43:00"},{"trip_id":"26","stop_id":"R11829","departure_time":"16:03:00"},{"trip_id":"27","stop_id":"R11829","departure_time":"16:23:00"},{"trip_id":"28","stop_id":"R11829","departure_time":"16:43:00"},{"trip_id":"29","stop_id":"R11829","departure_time":"17:03:00"},{"trip_id":"30","stop_id":"R11829","departure_time":"17:23:00"},{"trip_id":"31","stop_id":"R11829","departure_time":"17:43:00"},{"trip_id":"32","stop_id":"R11829","departure_time":"18:03:00"},{"trip_id":"33","stop_id":"R11829","departure_time":"18:23:00"},{"trip_id":"34","stop_id":"R11829","departure_time":"18:43:00"},{"trip_id":"35","stop_id":"R11829","departure_time":"19:03:00"},{"trip_id":"36","stop_id":"R11829","departure_time":"19:23:00"},{"trip_id":"37","stop_id":"R11829","departure_time":"19:43:00"},{"trip_id":"38","stop_id":"R11829","departure_time":"20:03:00"},{"trip_id":"39","stop_id":"R11829","departure_time":"20:23:00"},{"trip_id":"40","stop_id":"R11829","departure_time":"20:43:00"},{"trip_id":"41","stop_id":"R11829","departure_time":"21:03:00"},{"trip_id":"42","stop_id":"R11829","departure_time":"21:23:00"},{"trip_id":"43","stop_id":"R11829","departure_time":"21:43:00"},{"trip_id":"44","stop_id":"R11829","departure_time":"22:03:00"},{"trip_id":"45","stop_id":"R11829","departure_time":"22:23:00"},{"trip_id":"46","stop_id":"R11829","departure_time":"22:43:00"},{"trip_id":"47","stop_id":"R11829","departure_time":"23:03:00"},{"trip_id":"48","stop_id":"R11829","departure_time":"23:23:00"},{"trip_id":"49","stop_id":"R11829","departure_time":"23:43:00"},{"trip_id":"50","stop_id":"R11829","departure_time":"24:03:00"},{"trip_id":"51","stop_id":"R11829","departure_time":"24:23:00"},{"trip_id":"52","stop_id":"R11829","departure_time":"24:43:00"},{"trip_id":"53","stop_id":"R11829","departure_time":"07:58:00"},{"trip_id":"54","stop_id":"R11829","departure_time":"08:18:00"},{"trip_id":"55","stop_id":"R11829","departure_time":"08:38:00"},{"trip_id":"56","stop_id":"R11829","departure_time":"08:58:00"},{"trip_id":"57","stop_id":"R11829","departure_time":"09:18:00"},{"trip_id":"58","stop_id":"R11829","departure_time":"09:38:00"},{"trip_id":"59","stop_id":"R11829","departure_time":"09:53:00"},{"trip_id":"60","stop_id":"R11829","departure_time":"10:08:00"},{"trip_id":"61","stop_id":"R11829","departure_time":"10:23:00"},{"trip_id":"62","stop_id":"R11829","departure_time":"10:38:00"},{"trip_id":"63","stop_id":"R11829","departure_time":"10:53:00"},{"trip_id":"64","stop_id":"R11829","departure_time":"11:08:00"},{"trip_id":"65","stop_id":"R11829","departure_time":"11:23:00"},{"trip_id":"66","stop_id":"R11829","departure_time":"11:38:00"},{"trip_id":"67","stop_id":"R11829","departure_time":"11:53:00"},{"trip_id":"68","stop_id":"R11829","departure_time":"12:08:00"},{"trip_id":"69","stop_id":"R11829","departure_time":"12:23:00"},{"trip_id":"70","stop_id":"R11829","departure_time":"12:38:00"},{"trip_id":"71","stop_id":"R11829","departure_time":"12:53:00"},{"trip_id":"72","stop_id":"R11829","departure_time":"13:08:00"},{"trip_id":"73","stop_id":"R11829","departure_time":"13:23:00"},{"trip_id":"74","stop_id":"R11829","departure_time":"13:38:00"},{"trip_id":"75","stop_id":"R11829","departure_time":"13:53:00"},{"trip_id":"76","stop_id":"R11829","departure_time":"14:08:00"},{"trip_id":"77","stop_id":"R11829","departure_time":"14:23:00"},{"trip_id":"78","stop_id":"R11829","departure_time":"14:38:00"},{"trip_id":"79","stop_id":"R11829","departure_time":"14:53:00"},{"trip_id":"80","stop_id":"R11829","departure_time":"15:08:00"},{"trip_id":"81","stop_id":"R11829","departure_time":"15:23:00"},{"trip_id":"82","stop_id":"R11829","departure_time":"15:38:00"},{"trip_id":"83","stop_id":"R11829","departure_time":"15:53:00"},{"trip_id":"84","stop_id":"R11829","departure_time":"16:08:00"},{"trip_id":"85","stop_id":"R11829","departure_time":"16:23:00"},{"trip_id":"86","stop_id":"R11829","departure_time":"16:38:00"},{"trip_id":"87","stop_id":"R11829","departure_time":"16:53:00"},{"trip_id":"88","stop_id":"R11829","departure_time":"17:08:00"},{"trip_id":"89","stop_id":"R11829","departure_time":"17:23:00"},{"trip_id":"90","stop_id":"R11829","departure_time":"17:38:00"},{"trip_id":"91","stop_id":"R11829","departure_time":"17:53:00"},{"trip_id":"92","stop_id":"R11829","departure_time":"18:08:00"},{"trip_id":"93","stop_id":"R11829","departure_time":"18:23:00"},{"trip_id":"94","stop_id":"R11829","departure_time":"18:38:00"},{"trip_id":"95","stop_id":"R11829","departure_time":"18:53:00"},{"trip_id":"96","stop_id":"R11829","departure_time":"19:08:00"},{"trip_id":"97","stop_id":"R11829","departure_time":"19:23:00"},{"trip_id":"98","stop_id":"R11829","departure_time":"19:38:00"},{"trip_id":"99","stop_id":"R11829","departure_time":"19:53:00"},{"trip_id":"100","stop_id":"R11829","departure_time":"20:13:00"},{"trip_id":"101","stop_id":"R11829","departure_time":"20:33:00"},{"trip_id":"102","stop_id":"R11829","departure_time":"20:53:00"},{"trip_id":"103","stop_id":"R11829","departure_time":"21:13:00"},{"trip_id":"104","stop_id":"R11829","departure_time":"21:33:00"},{"trip_id":"105","stop_id":"R11829","departure_time":"21:53:00"},{"trip_id":"106","stop_id":"R11829","departure_time":"22:13:00"},{"trip_id":"107","stop_id":"R11829","departure_time":"22:33:00"},{"trip_id":"108","stop_id":"R11829","departure_time":"22:53:00"},{"trip_id":"109","stop_id":"R11829","departure_time":"23:13:00"},{"trip_id":"110","stop_id":"R11829","departure_time":"23:33:00"},{"trip_id":"111","stop_id":"R11829","departure_time":"23:53:00"},{"trip_id":"112","stop_id":"R11829","departure_time":"24:13:00"},{"trip_id":"113","stop_id":"R11829","departure_time":"24:33:00"},{"trip_id":"114","stop_id":"R11829","departure_time":"24:53:00"},{"trip_id":"115","stop_id":"R11829","departure_time":"08:53:00"},{"trip_id":"116","stop_id":"R11829","departure_time":"09:13:00"},{"trip_id":"117","stop_id":"R11829","departure_time":"09:33:00"},{"trip_id":"118","stop_id":"R11829","departure_time":"09:53:00"},{"trip_id":"119","stop_id":"R11829","departure_time":"10:13:00"},{"trip_id":"120","stop_id":"R11829","departure_time":"10:33:00"},{"trip_id":"121","stop_id":"R11829","departure_time":"10:53:00"},{"trip_id":"122","stop_id":"R11829","departure_time":"11:13:00"},{"trip_id":"123","stop_id":"R11829","departure_time":"11:33:00"},{"trip_id":"124","stop_id":"R11829","departure_time":"11:53:00"},{"trip_id":"125","stop_id":"R11829","departure_time":"12:13:00"},{"trip_id":"126","stop_id":"R11829","departure_time":"12:33:00"},{"trip_id":"127","stop_id":"R11829","departure_time":"12:53:00"},{"trip_id":"128","stop_id":"R11829","departure_time":"13:13:00"},{"trip_id":"129","stop_id":"R11829","departure_time":"13:33:00"},{"trip_id":"130","stop_id":"R11829","departure_time":"13:53:00"},{"trip_id":"131","stop_id":"R11829","departure_time":"14:13:00"},{"trip_id":"132","stop_id":"R11829","departure_time":"14:33:00"},{"trip_id":"133","stop_id":"R11829","departure_time":"14:53:00"},{"trip_id":"134","stop_id":"R11829","departure_time":"15:13:00"},{"trip_id":"135","stop_id":"R11829","departure_time":"15:33:00"},{"trip_id":"136","stop_id":"R11829","departure_time":"15:53:00"},{"trip_id":"137","stop_id":"R11829","departure_time":"16:13:00"},{"trip_id":"138","stop_id":"R11829","departure_time":"16:33:00"},{"trip_id":"139","stop_id":"R11829","departure_time":"16:53:00"},{"trip_id":"140","stop_id":"R11829","departure_time":"17:13:00"},{"trip_id":"141","stop_id":"R11829","departure_time":"17:33:00"},{"trip_id":"142","stop_id":"R11829","departure_time":"17:53:00"},{"trip_id":"143","stop_id":"R11829","departure_time":"18:13:00"},{"trip_id":"144","stop_id":"R11829","departure_time":"18:33:00"},{"trip_id":"145","stop_id":"R11829","departure_time":"18:53:00"},{"trip_id":"146","stop_id":"R11829","departure_time":"19:13:00"},{"trip_id":"147","stop_id":"R11829","departure_time":"19:33:00"},{"trip_id":"148","stop_id":"R11829","departure_time":"19:53:00"},{"trip_id":"149","stop_id":"R11829","departure_time":"20:13:00"},{"trip_id":"150","stop_id":"R11829","departure_time":"20:33:00"},{"trip_id":"151","stop_id":"R11829","departure_time":"20:53:00"},{"trip_id":"152","stop_id":"R11829","departure_time":"21:13:00"},{"trip_id":"153","stop_id":"R11829","departure_time":"21:33:00"},{"trip_id":"154","stop_id":"R11829","departure_time":"21:53:00"},{"trip_id":"155","stop_id":"R11829","departure_time":"22:13:00"},{"trip_id":"156","stop_id":"R11829","departure_time":"22:33:00"},{"trip_id":"157","stop_id":"R11829","departure_time":"22:53:00"},{"trip_id":"158","stop_id":"R11829","departure_time":"23:13:00"},{"trip_id":"159","stop_id":"R11829","departure_time":"23:33:00"},{"trip_id":"160","stop_id":"R11829","departure_time":"23:53:00"},{"trip_id":"161","stop_id":"R11829","departure_time":"06:06:00"},{"trip_id":"162","stop_id":"R11829","departure_time":"06:26:00"},{"trip_id":"163","stop_id":"R11829","departure_time":"06:46:00"},{"trip_id":"164","stop_id":"R11829","departure_time":"07:06:00"},{"trip_id":"165","stop_id":"R11829","departure_time":"07:26:00"},{"trip_id":"166","stop_id":"R11829","departure_time":"07:46:00"},{"trip_id":"167","stop_id":"R11829","departure_time":"08:06:00"},{"trip_id":"168","stop_id":"R11829","departure_time":"08:26:00"},{"trip_id":"169","stop_id":"R11829","departure_time":"08:46:00"},{"trip_id":"170","stop_id":"R11829","departure_time":"09:06:00"},{"trip_id":"171","stop_id":"R11829","departure_time":"09:26:00"},{"trip_id":"172","stop_id":"R11829","departure_time":"09:46:00"},{"trip_id":"173","stop_id":"R11829","departure_time":"10:05:00"},{"trip_id":"174","stop_id":"R11829","departure_time":"10:25:00"},{"trip_id":"175","stop_id":"R11829","departure_time":"10:45:00"},{"trip_id":"176","stop_id":"R11829","departure_time":"11:05:00"},{"trip_id":"177","stop_id":"R11829","departure_time":"11:25:00"},{"trip_id":"178","stop_id":"R11829","departure_time":"11:45:00"},{"trip_id":"179","stop_id":"R11829","departure_time":"12:05:00"},{"trip_id":"180","stop_id":"R11829","departure_time":"12:25:00"},{"trip_id":"181","stop_id":"R11829","departure_time":"12:45:00"},{"trip_id":"182","stop_id":"R11829","departure_time":"13:05:00"},{"trip_id":"183","stop_id":"R11829","departure_time":"13:25:00"},{"trip_id":"184","stop_id":"R11829","departure_time":"13:45:00"},{"trip_id":"185","stop_id":"R11829","departure_time":"14:05:00"},{"trip_id":"186","stop_id":"R11829","departure_time":"14:28:00"},{"trip_id":"187","stop_id":"R11829","departure_time":"14:46:00"},{"trip_id":"188","stop_id":"R11829","departure_time":"15:06:00"},{"trip_id":"189","stop_id":"R11829","departure_time":"15:26:00"},{"trip_id":"190","stop_id":"R11829","departure_time":"15:46:00"},{"trip_id":"191","stop_id":"R11829","departure_time":"16:06:00"},{"trip_id":"192","stop_id":"R11829","departure_time":"16:26:00"},{"trip_id":"193","stop_id":"R11829","departure_time":"16:46:00"},{"trip_id":"194","stop_id":"R11829","departure_time":"17:06:00"},{"trip_id":"195","stop_id":"R11829","departure_time":"17:26:00"},{"trip_id":"196","stop_id":"R11829","departure_time":"17:46:00"},{"trip_id":"197","stop_id":"R11829","departure_time":"18:06:00"},{"trip_id":"198","stop_id":"R11829","departure_time":"18:26:00"},{"trip_id":"199","stop_id":"R11829","departure_time":"18:46:00"},{"trip_id":"200","stop_id":"R11829","departure_time":"19:04:00"},{"trip_id":"201","stop_id":"R11829","departure_time":"19:25:00"},{"trip_id":"202","stop_id":"R11829","departure_time":"19:45:00"},{"trip_id":"203","stop_id":"R11829","departure_time":"20:05:00"},{"trip_id":"204","stop_id":"R11829","departure_time":"20:25:00"},{"trip_id":"205","stop_id":"R11829","departure_time":"20:45:00"},{"trip_id":"206","stop_id":"R11829","departure_time":"21:05:00"},{"trip_id":"207","stop_id":"R11829","departure_time":"21:25:00"},{"trip_id":"208","stop_id":"R11829","departure_time":"21:45:00"},{"trip_id":"209","stop_id":"R11829","departure_time":"22:05:00"},{"trip_id":"210","stop_id":"R11829","departure_time":"22:25:00"},{"trip_id":"211","stop_id":"R11829","departure_time":"22:45:00"},{"trip_id":"212","stop_id":"R11829","departure_time":"23:05:00"},{"trip_id":"213","stop_id":"R11829","departure_time":"23:25:00"},{"trip_id":"214","stop_id":"R11829","departure_time":"23:45:00"},{"trip_id":"215","stop_id":"R11829","departure_time":"24:05:00"},{"trip_id":"216","stop_id":"R11829","departure_time":"24:25:00"},{"trip_id":"217","stop_id":"R11829","departure_time":"24:43:00"},{"trip_id":"218","stop_id":"R11829","departure_time":"25:03:00"},{"trip_id":"219","stop_id":"R11829","departure_time":"06:01:00"},{"trip_id":"220","stop_id":"R11829","departure_time":"06:25:00"},{"trip_id":"221","stop_id":"R11829","departure_time":"06:40:00"},{"trip_id":"222","stop_id":"R11829","departure_time":"06:55:00"},{"trip_id":"223","stop_id":"R11829","departure_time":"07:07:00"},{"trip_id":"224","stop_id":"R11829","departure_time":"07:19:00"},{"trip_id":"225","stop_id":"R11829","departure_time":"07:31:00"},{"trip_id":"226","stop_id":"R11829","departure_time":"07:43:00"},{"trip_id":"227","stop_id":"R11829","departure_time":"07:55:00"},{"trip_id":"228","stop_id":"R11829","departure_time":"08:07:00"},{"trip_id":"229","stop_id":"R11829","departure_time":"08:19:00"},{"trip_id":"230","stop_id":"R11829","departure_time":"08:31:00"},{"trip_id":"231","stop_id":"R11829","departure_time":"08:43:00"},{"trip_id":"232","stop_id":"R11829","departure_time":"08:55:00"},{"trip_id":"233","stop_id":"R11829","departure_time":"09:07:00"},{"trip_id":"234","stop_id":"R11829","departure_time":"09:19:00"},{"trip_id":"235","stop_id":"R11829","departure_time":"09:30:00"},{"trip_id":"236","stop_id":"R11829","departure_time":"09:40:00"},{"trip_id":"237","stop_id":"R11829","departure_time":"09:54:00"},{"trip_id":"238","stop_id":"R11829","departure_time":"10:09:00"},{"trip_id":"239","stop_id":"R11829","departure_time":"10:24:00"},{"trip_id":"240","stop_id":"R11829","departure_time":"10:39:00"},{"trip_id":"241","stop_id":"R11829","departure_time":"10:54:00"},{"trip_id":"242","stop_id":"R11829","departure_time":"11:09:00"},{"trip_id":"243","stop_id":"R11829","departure_time":"11:24:00"},{"trip_id":"244","stop_id":"R11829","departure_time":"11:39:00"},{"trip_id":"245","stop_id":"R11829","departure_time":"11:54:00"},{"trip_id":"246","stop_id":"R11829","departure_time":"12:09:00"},{"trip_id":"247","stop_id":"R11829","departure_time":"12:24:00"},{"trip_id":"248","stop_id":"R11829","departure_time":"12:39:00"},{"trip_id":"249","stop_id":"R11829","departure_time":"12:54:00"},{"trip_id":"250","stop_id":"R11829","departure_time":"13:09:00"},{"trip_id":"251","stop_id":"R11829","departure_time":"13:24:00"},{"trip_id":"252","stop_id":"R11829","departure_time":"13:39:00"},{"trip_id":"253","stop_id":"R11829","departure_time":"13:54:00"},{"trip_id":"254","stop_id":"R11829","departure_time":"14:09:00"},{"trip_id":"255","stop_id":"R11829","departure_time":"14:24:00"},{"trip_id":"256","stop_id":"R11829","departure_time":"14:41:00"},{"trip_id":"257","stop_id":"R11829","departure_time":"14:55:00"},{"trip_id":"258","stop_id":"R11829","departure_time":"15:07:00"},{"trip_id":"259","stop_id":"R11829","departure_time":"15:19:00"},{"trip_id":"260","stop_id":"R11829","departure_time":"15:31:00"},{"trip_id":"261","stop_id":"R11829","departure_time":"15:43:00"},{"trip_id":"262","stop_id":"R11829","departure_time":"15:55:00"},{"trip_id":"263","stop_id":"R11829","departure_time":"16:07:00"},{"trip_id":"264","stop_id":"R11829","departure_time":"16:19:00"},{"trip_id":"265","stop_id":"R11829","departure_time":"16:31:00"},{"trip_id":"266","stop_id":"R11829","departure_time":"16:43:00"},{"trip_id":"267","stop_id":"R11829","departure_time":"16:55:00"},{"trip_id":"268","stop_id":"R11829","departure_time":"17:07:00"},{"trip_id":"269","stop_id":"R11829","departure_time":"17:19:00"},{"trip_id":"270","stop_id":"R11829","departure_time":"17:30:00"},{"trip_id":"271","stop_id":"R11829","departure_time":"17:42:00"},{"trip_id":"272","stop_id":"R11829","departure_time":"17:54:00"},{"trip_id":"273","stop_id":"R11829","departure_time":"18:06:00"},{"trip_id":"274","stop_id":"R11829","departure_time":"18:16:00"},{"trip_id":"275","stop_id":"R11829","departure_time":"18:29:00"},{"trip_id":"276","stop_id":"R11829","departure_time":"18:39:00"},{"trip_id":"277","stop_id":"R11829","departure_time":"18:52:00"},{"trip_id":"278","stop_id":"R11829","departure_time":"19:07:00"},{"trip_id":"279","stop_id":"R11829","departure_time":"19:22:00"},{"trip_id":"280","stop_id":"R11829","departure_time":"19:37:00"},{"trip_id":"281","stop_id":"R11829","departure_time":"19:52:00"},{"trip_id":"282","stop_id":"R11829","departure_time":"20:07:00"},{"trip_id":"283","stop_id":"R11829","departure_time":"20:22:00"},{"trip_id":"284","stop_id":"R11829","departure_time":"20:37:00"},{"trip_id":"285","stop_id":"R11829","departure_time":"20:52:00"},{"trip_id":"286","stop_id":"R11829","departure_time":"21:12:00"},{"trip_id":"287","stop_id":"R11829","departure_time":"21:32:00"},{"trip_id":"288","stop_id":"R11829","departure_time":"21:52:00"},{"trip_id":"289","stop_id":"R11829","departure_time":"22:12:00"},{"trip_id":"290","stop_id":"R11829","departure_time":"22:32:00"},{"trip_id":"291","stop_id":"R11829","departure_time":"22:52:00"},{"trip_id":"292","stop_id":"R11829","departure_time":"23:12:00"},{"trip_id":"293","stop_id":"R11829","departure_time":"23:32:00"},{"trip_id":"294","stop_id":"R11829","departure_time":"23:52:00"},{"trip_id":"295","stop_id":"R11829","departure_time":"24:12:00"},{"trip_id":"296","stop_id":"R11829","departure_time":"24:32:00"},{"trip_id":"297","stop_id":"R11829","departure_time":"24:52:00"}];         // [{trip_id, stop_id, departure_time},...]
+
+function fmtClock(d){
+  const parts = new Intl.DateTimeFormat("en-US", {timeZone: TZ, hour12:false, hour:"2-digit", minute:"2-digit", second:"2-digit"}).formatToParts(d);
+  const get = t => parts.find(p=>p.type===t)?.value ?? "";
+  return `${get("hour")}:${get("minute")}:${get("second")}`;
+}
+function fmtDate(d){
+  return new Intl.DateTimeFormat("en-US", {timeZone: TZ, weekday:"long", year:"numeric", month:"long", day:"numeric"}).format(d);
+}
+function now(){ return new Date(); }
+function ymd(d){
+  const parts = new Intl.DateTimeFormat("en-CA", {timeZone: TZ, year:"numeric", month:"2-digit", day:"2-digit"}).formatToParts(d);
+  const get = t => parts.find(p=>p.type===t)?.value ?? "";
+  return `${get("year")}${get("month")}${get("day")}`;
+}
+function weekdayName(d){
+  return new Intl.DateTimeFormat("en-US", {timeZone: TZ, weekday:"long"}).format(d);
+}
+function hmsSec(d){
+  const parts = new Intl.DateTimeFormat("en-US", {timeZone: TZ, hour12:false, hour:"2-digit", minute:"2-digit", second:"2-digit"}).formatToParts(d);
+  const get = t => Number(parts.find(p=>p.type===t)?.value ?? 0);
+  return get("hour")*3600 + get("minute")*60 + get("second");
+}
+function timeToSec(gtfsTime){
+  const [hh,mm,ss] = gtfsTime.split(":").map(x=>Number(x));
+  return (hh*3600) + (mm*60) + (ss||0); // HH may be 24+
+}
+function displayTime(hhmmss){
+  const [hh,mm] = hhmmss.split(":");
+  return `${Number(hh)}:${mm}`; // preserves 24+ hour display
+}
+function countdown(deltaSec){
+  const m = Math.max(0, Math.floor(deltaSec/60));
+  return (m===0) ? "<1 min" : `${m} min`;
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const SERVICE_DAY_START_HOUR = 3; // service day is "yesterday" until 3:00am local
+
+function addDays(dateObj, days){
+  return new Date(dateObj.getTime() + days*86400000);
+}
+
+function serviceDayYMD(){
+  const d = now();
+  const parts = new Intl.DateTimeFormat("en-US", {timeZone: TZ, hour12:false, hour:"2-digit"}).formatToParts(d);
+  const hour = Number(parts.find(p=>p.type==="hour")?.value ?? 0);
+  return ymd(hour < SERVICE_DAY_START_HOUR ? addDays(d, -1) : d);
+}
+
+function serviceDayDateObj(serviceDateYMD){
+  // serviceDateYMD is in YYYYMMDD in TZ.
+  const y = Number(serviceDateYMD.slice(0,4));
+  const m = Number(serviceDateYMD.slice(4,6));
+  const d = Number(serviceDateYMD.slice(6,8));
+  // Create date in local runtime tz; we only use it for day-of-week label.
+  return new Date(y, m-1, d);
+}
+
+function nowServiceSec(serviceDateYMD){
+  const d = now();
+  const today = ymd(d);
+  const sec = hmsSec(d);
+  return (serviceDateYMD === today) ? sec : (sec + 86400);
+}
+
+function activeServicesForDate(serviceDateYMD){
+  const set = new Set();
+  for (const r of CALENDAR_DATES){
+    if (r.date !== serviceDateYMD) continue;
+    if (r.exception_type === "1") set.add(r.service_id);
+    if (r.exception_type === "2") set.delete(r.service_id);
+  }
+  return set;
+}
+
+// NFTA rail GTFS mapping:
+// direction_id "1" => Northbound (toward University)
+// direction_id "0" => Southbound (toward DL&W)
+function renderDir(dirWanted, tbodyId, pillId){
+  const tbody = document.getElementById(tbodyId);
+  const pill  = document.getElementById(pillId);
+  tbody.innerHTML = "";
+
+  const serviceDate = serviceDayYMD();
+  const active = activeServicesForDate(serviceDate);
+  const nowSec = nowServiceSec(serviceDate);
+
+  const items = [];
+  for (const d of DEPS){
+    if (!STATION_STOP_IDS.has(d.stop_id)) continue;
+    const t = TRIPS[d.trip_id];
+    if (!t) continue;
+    if (!active.has(t.service_id)) continue;
+
+    const depSec = timeToSec(d.departure_time);
+    if (depSec < nowSec) continue;
+
+    const dirId = String(t.direction_id ?? "0");
+    if (dirWanted === "NB" && dirId !== "1") continue;
+    if (dirWanted === "SB" && dirId !== "0") continue;
+
+    items.push({
+      t: d.departure_time,
+      tDisp: displayTime(d.departure_time),
+      dirText: (dirId === "1") ? "Northbound" : "Southbound",
+      inText: countdown(depSec - nowSec),
+      service_id: t.service_id,
+      stop_id: d.stop_id,
+      trip_id: d.trip_id
+    });
+  }
+
+  items.sort((a,b)=> timeToSec(a.t) - timeToSec(b.t));
+  const top = items.slice(0,3);
+  pill.textContent = `${top.length} shown`;
+
+  if (!top.length){
+    tbody.innerHTML = `<tr><td colspan="3" style="color:var(--muted); padding:clamp(8px,1.2vh,12px) clamp(4px,0.6vw,6px);">No upcoming trips.</td></tr>`;
+  } else {
+    for (const r of top){
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="time">${escapeHtml(r.tDisp)}</td>
+        <td class="dir">${escapeHtml(r.dirText)}</td>
+        <td class="in">${escapeHtml(r.inText)}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  return { serviceDate, active, nowSec, items, top };
+}
+
+function tickClock(){
+  const d = now();
+  document.getElementById("clockTime").textContent = fmtClock(d);
+  document.getElementById("clockDate").textContent = fmtDate(d);
+}
+
+// Debug banner + badge
+let DBG_ON = false;
+function setDbg(on){
+  DBG_ON = !!on;
+  const el = document.getElementById("dbg");
+  el.classList.toggle("show", DBG_ON);
+}
+
+function updateBadge(serviceDateYMD){
+  const dObj = serviceDayDateObj(serviceDateYMD);
+  const dow = dObj.getDay(); // 0 Sun .. 6 Sat (local)
+  const isWeekend = (dow === 0 || dow === 6);
+  const badge = document.getElementById("serviceBadge");
+  badge.textContent = isWeekend ? "WEEKEND SERVICE" : "WEEKDAY SERVICE";
+  badge.classList.toggle("weekend", isWeekend);
+}
+
+function renderAll(){
+  const dbgEl = document.getElementById("dbg");
+
+  // Run renders (each returns debug info)
+  const out = [];
+  out.push(renderDir("NB","nbRows","nbPill"));
+
+  // Determine a representative service day/active set from first render result
+  const first = out.find(x => x && x.serviceDate);
+  if (first){
+    updateBadge(first.serviceDate);
+  }
+
+  if (DBG_ON){
+    const serviceDate = first?.serviceDate ?? "??????";
+    const activeIds = first ? Array.from(first.active).sort() : [];
+    const nowSec = first?.nowSec ?? 0;
+
+    // Show next few candidates across all directions
+    const candidates = [];
+    for (const o of out){
+      if (!o || !o.items) continue;
+      for (const it of o.items.slice(0,10)) candidates.push(it);
+    }
+    candidates.sort((a,b)=> timeToSec(a.t) - timeToSec(b.t));
+    const peek = candidates.slice(0,6).map(it =>
+      `${it.t}  ${it.dirText.padEnd(10)}  svc=${it.service_id}  stop=${it.stop_id}  trip=${it.trip_id}`
+    );
+
+    const stopIds = Array.from(STATION_STOP_IDS.values()).sort();
+    dbgEl.textContent =
+`DEBUG (press D to toggle)
+Station: $DL&W Station
+Service day: ${serviceDate}  (start hour=${SERVICE_DAY_START_HOUR})
+Now(sec since service day midnight): ${nowSec}
+Active service_ids (${activeIds.length}): ${activeIds.join(", ") || "(none)"}
+Stop IDs (${stopIds.length}): ${stopIds.join(", ")}
+Upcoming candidates (first 6):
+${peek.join("\n") || "(none)"}\n`;
+  }
+}
+
+(function main(){
+  // Footer metadata
+  document.getElementById("gtfsDated").textContent = BUILD_META.gtfs_dated || "2026-01-29 14:04";
+  document.getElementById("builtAt").textContent  = BUILD_META.built_at  || "2026-02-03 04:35";
+
+  // Debug toggle wiring
+  const btn = document.getElementById("dbgBtn");
+  btn.addEventListener("click", ()=> setDbg(!DBG_ON));
+  document.addEventListener("keydown", (e)=>{
+    if ((e.key || "").toLowerCase() === "d") setDbg(!DBG_ON);
+  });
+
+  tickClock(); setInterval(tickClock, 1000);
+  renderAll();
+  setInterval(renderAll, 10000);
+})();
+</script>
+</body>
+</html>
